@@ -1,0 +1,631 @@
+"""
+Trainer Module - DCT-GAN Training Pipeline
+
+Implementa el training loop completo del paper Malik et al. (2025):
+- Estrategia de actualización 4:1 (Generator:Discriminator)
+- Optimizadores: Adam para Generator, SGD para Discriminator
+- Scheduler: StepLR (decay cada 30 epochs)
+- 100 epochs total
+- Batch size: 32
+- Logging de métricas: PSNR, SSIM, losses
+- Checkpointing automático
+- Validación por epoch
+
+Paper: "A Hybrid Steganography Framework Using DCT and GAN"
+Target: PSNR ~58.27 dB, SSIM ~0.942
+"""
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from pathlib import Path
+import time
+from typing import Dict, Tuple, Optional, List
+import logging
+from tqdm import tqdm
+
+from .losses import HybridLoss, GradientPenalty, calculate_psnr
+from .metrics import calculate_ssim, calculate_rmse
+
+
+class DCTGANTrainer:
+    """
+    Trainer para DCT-GAN Steganography
+    
+    Implementa el training loop completo con estrategia 4:1
+    (4 actualizaciones generator por 1 actualización discriminator)
+    
+    Args:
+        model: Modelo DCTGAN completo
+        config: Diccionario de configuración
+        device: Device (cpu/cuda)
+        checkpoint_dir: Directorio para guardar checkpoints
+        log_dir: Directorio para logs
+    """
+    
+    def __init__(self, 
+                 model: nn.Module, 
+                 config: Dict,
+                 device: torch.device,
+                 checkpoint_dir: Optional[Path] = None,
+                 log_dir: Optional[Path] = None):
+        
+        self.model = model.to(device)
+        self.config = config
+        self.device = device
+        
+        # Directorios
+        self.checkpoint_dir = checkpoint_dir or Path("checkpoints")
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.log_dir = log_dir or Path("logs")
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup logging
+        self._setup_logging()
+        
+        # Loss functions
+        self._setup_loss_functions()
+        
+        # Optimizers and schedulers
+        self._setup_optimizers()
+        
+        # Training state
+        self.current_epoch = 0
+        self.best_psnr = 0.0
+        self.train_history = []
+        self.val_history = []
+        
+        self.logger.info("DCTGANTrainer initialized successfully")
+        self.logger.info(f"Device: {device}")
+        self.logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+    
+    def _setup_logging(self):
+        """Configura sistema de logging"""
+        log_file = self.log_dir / f"training_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger('DCTGANTrainer')
+    
+    def _setup_loss_functions(self):
+        """
+        Configura funciones de pérdida según paper
+        
+        Ecuación 5:
+        L_total = α × L_MSE + β × L_crossentropy + γ × L_adversarial
+        
+        α = 0.3 (similitud cover-stego)
+        β = 15.0 (recuperación secret)
+        γ = 0.03 (adversarial)
+        """
+        loss_config = self.config.get('loss', {})
+        
+        alpha = loss_config.get('alpha', 0.3)
+        beta = loss_config.get('beta', 15.0)
+        gamma = loss_config.get('gamma', 0.03)
+        
+        self.hybrid_loss = HybridLoss(
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            use_wgan=True
+        )
+        
+        # Gradient penalty para WGAN-GP
+        self.gradient_penalty = GradientPenalty(lambda_gp=10.0)
+        
+        self.logger.info(f"Loss weights: α={alpha}, β={beta}, γ={gamma}")
+    
+    def _setup_optimizers(self):
+        """
+        Configura optimizadores y schedulers según paper
+        
+        Generator (Encoder + Decoder): Adam lr=1e-3
+        Discriminator: SGD lr=1e-3
+        Scheduler: StepLR (decay 0.5 cada 30 epochs)
+        """
+        train_config = self.config.get('training', {})
+        opt_config = train_config.get('optimizer', {})
+        
+        # Generator optimizer (Encoder + Decoder)
+        gen_config = opt_config.get('generator', {})
+        gen_lr = gen_config.get('lr', 1e-3)
+        gen_betas = tuple(gen_config.get('betas', [0.9, 0.999]))
+        gen_wd = gen_config.get('weight_decay', 0.005)
+        
+        generator_params = list(self.model.encoder.parameters()) + \
+                          list(self.model.decoder.parameters())
+        
+        self.optimizer_G = optim.Adam(
+            generator_params,
+            lr=gen_lr,
+            betas=gen_betas,
+            weight_decay=gen_wd
+        )
+        
+        # Discriminator optimizer
+        disc_config = opt_config.get('discriminator', {})
+        disc_lr = disc_config.get('lr', 1e-3)
+        disc_momentum = disc_config.get('momentum', 0.9)
+        disc_wd = disc_config.get('weight_decay', 0.005)
+        
+        self.optimizer_D = optim.SGD(
+            self.model.discriminator.parameters(),
+            lr=disc_lr,
+            momentum=disc_momentum,
+            weight_decay=disc_wd
+        )
+        
+        # Learning rate schedulers
+        scheduler_config = train_config.get('lr_scheduler', {})
+        step_size = scheduler_config.get('step_size', 30)
+        gamma = scheduler_config.get('gamma', 0.5)
+        
+        self.scheduler_G = optim.lr_scheduler.StepLR(
+            self.optimizer_G, 
+            step_size=step_size, 
+            gamma=gamma
+        )
+        self.scheduler_D = optim.lr_scheduler.StepLR(
+            self.optimizer_D,
+            step_size=step_size,
+            gamma=gamma
+        )
+        
+        self.logger.info(f"Generator optimizer: Adam lr={gen_lr}")
+        self.logger.info(f"Discriminator optimizer: SGD lr={disc_lr}")
+        self.logger.info(f"Scheduler: StepLR step_size={step_size}, gamma={gamma}")
+    
+    def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
+        """
+        Entrena una época completa
+        
+        Implementa estrategia 4:1:
+        - 4 actualizaciones del generator por cada actualización del discriminator
+        
+        Args:
+            train_loader: DataLoader con imágenes de entrenamiento
+            
+        Returns:
+            Diccionario con métricas promedio del epoch
+        """
+        self.model.train()
+        
+        # Contadores para estrategia 4:1
+        update_strategy = self.config.get('training', {}).get('update_strategy', {})
+        gen_updates_per_batch = update_strategy.get('generator_updates_per_epoch', 4)
+        disc_updates_per_batch = update_strategy.get('discriminator_updates_per_epoch', 1)
+        
+        # Acumuladores de métricas
+        epoch_metrics = {
+            'loss_G_total': 0.0,
+            'loss_G_mse': 0.0,
+            'loss_G_bce': 0.0,
+            'loss_G_adv': 0.0,
+            'loss_D': 0.0,
+            'loss_GP': 0.0,
+            'psnr': 0.0,
+            'ssim': 0.0,
+            'D_real': 0.0,
+            'D_fake': 0.0
+        }
+        
+        num_batches = len(train_loader)
+        
+        # Progress bar
+        pbar = tqdm(train_loader, desc=f"Epoch {self.current_epoch+1}")
+        
+        for batch_idx, batch in enumerate(pbar):
+            # Extraer imágenes del batch
+            # Formato esperado: {'cover': tensor, 'secret': tensor}
+            cover = batch['cover'].to(self.device)
+            secret = batch['secret'].to(self.device)
+            batch_size = cover.size(0)
+            
+            # ============================================
+            # 1. ENTRENAR DISCRIMINATOR
+            # ============================================
+            for _ in range(disc_updates_per_batch):
+                self.optimizer_D.zero_grad()
+                
+                # Forward pass del generator (sin gradientes para encoder/decoder)
+                with torch.no_grad():
+                    stego, _ = self.model(cover, secret, mode='full')
+                
+                # Discriminator outputs
+                real_validity = self.model.discriminator(cover)
+                fake_validity = self.model.discriminator(stego.detach())
+                
+                # Discriminator loss (WGAN)
+                loss_D, disc_metrics = self.hybrid_loss.discriminator_loss(
+                    real_validity, 
+                    fake_validity
+                )
+                
+                # Gradient penalty (WGAN-GP)
+                gp = self.gradient_penalty(
+                    self.model.discriminator,
+                    cover,
+                    stego.detach(),
+                    self.device
+                )
+                
+                # Total discriminator loss
+                loss_D_total = loss_D + gp
+                
+                # Backward
+                loss_D_total.backward()
+                self.optimizer_D.step()
+            
+            # ============================================
+            # 2. ENTRENAR GENERATOR (ENCODER + DECODER)
+            # ============================================
+            for _ in range(gen_updates_per_batch):
+                self.optimizer_G.zero_grad()
+                
+                # Forward pass completo
+                stego, recovered_secret = self.model(cover, secret, mode='full')
+                
+                # Discriminator output para stego
+                fake_validity = self.model.discriminator(stego)
+                
+                # Generator loss (Ecuación 5)
+                loss_G, gen_metrics = self.hybrid_loss.generator_loss(
+                    cover_image=cover,
+                    stego_image=stego,
+                    secret_original=secret,
+                    secret_recovered=recovered_secret,
+                    discriminator_output=fake_validity
+                )
+                
+                # Backward
+                loss_G.backward()
+                self.optimizer_G.step()
+            
+            # ============================================
+            # 3. CALCULAR MÉTRICAS
+            # ============================================
+            with torch.no_grad():
+                # PSNR (cover vs stego)
+                psnr = calculate_psnr(cover, stego, max_val=1.0)
+                
+                # SSIM (cover vs stego)
+                ssim = calculate_ssim(cover, stego)
+                
+                # Acumular métricas
+                epoch_metrics['loss_G_total'] += gen_metrics['loss_total']
+                epoch_metrics['loss_G_mse'] += gen_metrics['loss_mse']
+                epoch_metrics['loss_G_bce'] += gen_metrics['loss_bce']
+                epoch_metrics['loss_G_adv'] += gen_metrics['loss_adv']
+                epoch_metrics['loss_D'] += disc_metrics['loss_discriminator']
+                epoch_metrics['loss_GP'] += gp.item()
+                epoch_metrics['psnr'] += psnr.item()
+                epoch_metrics['ssim'] += ssim
+                epoch_metrics['D_real'] += disc_metrics['D_real']
+                epoch_metrics['D_fake'] += disc_metrics['D_fake']
+            
+            # Actualizar progress bar
+            pbar.set_postfix({
+                'L_G': f"{gen_metrics['loss_total']:.4f}",
+                'L_D': f"{disc_metrics['loss_discriminator']:.4f}",
+                'PSNR': f"{psnr.item():.2f} dB",
+                'SSIM': f"{ssim:.4f}"
+            })
+        
+        # Promediar métricas
+        for key in epoch_metrics:
+            epoch_metrics[key] /= num_batches
+        
+        return epoch_metrics
+    
+    def validate(self, val_loader: DataLoader) -> Dict[str, float]:
+        """
+        Valida el modelo en el conjunto de validación
+        
+        Args:
+            val_loader: DataLoader con imágenes de validación
+            
+        Returns:
+            Diccionario con métricas de validación
+        """
+        self.model.eval()
+        
+        val_metrics = {
+            'loss_G_total': 0.0,
+            'psnr': 0.0,
+            'ssim': 0.0,
+            'rmse': 0.0
+        }
+        
+        num_batches = len(val_loader)
+        
+        with torch.no_grad():
+            pbar = tqdm(val_loader, desc="Validating")
+            
+            for batch in pbar:
+                cover = batch['cover'].to(self.device)
+                secret = batch['secret'].to(self.device)
+                
+                # Forward pass
+                stego, recovered_secret = self.model(cover, secret, mode='full')
+                
+                # Discriminator output
+                fake_validity = self.model.discriminator(stego)
+                
+                # Generator loss
+                loss_G, _ = self.hybrid_loss.generator_loss(
+                    cover_image=cover,
+                    stego_image=stego,
+                    secret_original=secret,
+                    secret_recovered=recovered_secret,
+                    discriminator_output=fake_validity
+                )
+                
+                # Métricas
+                psnr = calculate_psnr(cover, stego, max_val=1.0)
+                ssim = calculate_ssim(cover, stego)
+                rmse = calculate_rmse(secret, recovered_secret)
+                
+                # Acumular
+                val_metrics['loss_G_total'] += loss_G.item()
+                val_metrics['psnr'] += psnr.item()
+                val_metrics['ssim'] += ssim
+                val_metrics['rmse'] += rmse
+                
+                pbar.set_postfix({
+                    'PSNR': f"{psnr.item():.2f} dB",
+                    'SSIM': f"{ssim:.4f}"
+                })
+        
+        # Promediar
+        for key in val_metrics:
+            val_metrics[key] /= num_batches
+        
+        return val_metrics
+    
+    def save_checkpoint(self, 
+                       epoch: int, 
+                       metrics: Dict[str, float],
+                       is_best: bool = False,
+                       filename: Optional[str] = None):
+        """
+        Guarda checkpoint del modelo
+        
+        Args:
+            epoch: Número de época actual
+            metrics: Diccionario con métricas actuales
+            is_best: Si es el mejor modelo hasta ahora
+            filename: Nombre personalizado del archivo
+        """
+        if filename is None:
+            filename = f"checkpoint_epoch_{epoch:03d}.pth"
+        
+        checkpoint_path = self.checkpoint_dir / filename
+        
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_G_state_dict': self.optimizer_G.state_dict(),
+            'optimizer_D_state_dict': self.optimizer_D.state_dict(),
+            'scheduler_G_state_dict': self.scheduler_G.state_dict(),
+            'scheduler_D_state_dict': self.scheduler_D.state_dict(),
+            'metrics': metrics,
+            'config': self.config,
+            'best_psnr': self.best_psnr
+        }
+        
+        torch.save(checkpoint, checkpoint_path)
+        self.logger.info(f"Checkpoint saved: {checkpoint_path}")
+        
+        # Guardar mejor modelo por separado
+        if is_best:
+            best_path = self.checkpoint_dir / "best_model.pth"
+            torch.save(checkpoint, best_path)
+            self.logger.info(f"New best model saved: {best_path} (PSNR: {metrics['psnr']:.2f} dB)")
+    
+    def load_checkpoint(self, checkpoint_path: Path):
+        """
+        Carga checkpoint del modelo
+        
+        Args:
+            checkpoint_path: Path al archivo de checkpoint
+        """
+        self.logger.info(f"Loading checkpoint from {checkpoint_path}")
+        
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
+        self.optimizer_D.load_state_dict(checkpoint['optimizer_D_state_dict'])
+        self.scheduler_G.load_state_dict(checkpoint['scheduler_G_state_dict'])
+        self.scheduler_D.load_state_dict(checkpoint['scheduler_D_state_dict'])
+        
+        self.current_epoch = checkpoint['epoch']
+        self.best_psnr = checkpoint['best_psnr']
+        
+        self.logger.info(f"Checkpoint loaded successfully (epoch {self.current_epoch})")
+    
+    def train(self, 
+              train_loader: DataLoader,
+              val_loader: Optional[DataLoader] = None,
+              num_epochs: Optional[int] = None,
+              save_frequency: int = 10,
+              early_stopping_patience: int = 20):
+        """
+        Training loop completo
+        
+        Args:
+            train_loader: DataLoader de entrenamiento
+            val_loader: DataLoader de validación (opcional)
+            num_epochs: Número de épocas (si None, usa config)
+            save_frequency: Guardar checkpoint cada N epochs
+            early_stopping_patience: Epochs sin mejora antes de early stopping
+        """
+        if num_epochs is None:
+            num_epochs = self.config.get('training', {}).get('num_epochs', 100)
+        
+        self.logger.info(f"Starting training for {num_epochs} epochs")
+        self.logger.info(f"Save frequency: {save_frequency} epochs")
+        self.logger.info(f"Early stopping patience: {early_stopping_patience} epochs")
+        
+        # Early stopping counter
+        epochs_without_improvement = 0
+        
+        for epoch in range(self.current_epoch, num_epochs):
+            self.current_epoch = epoch
+            epoch_start_time = time.time()
+            
+            # ============================================
+            # TRAIN
+            # ============================================
+            train_metrics = self.train_epoch(train_loader)
+            
+            # ============================================
+            # VALIDATE
+            # ============================================
+            if val_loader is not None:
+                val_metrics = self.validate(val_loader)
+            else:
+                val_metrics = {}
+            
+            # ============================================
+            # UPDATE SCHEDULERS
+            # ============================================
+            self.scheduler_G.step()
+            self.scheduler_D.step()
+            
+            # ============================================
+            # LOG METRICS
+            # ============================================
+            epoch_time = time.time() - epoch_start_time
+            
+            self.logger.info(f"\nEpoch {epoch+1}/{num_epochs} - {epoch_time:.2f}s")
+            self.logger.info(f"[TRAIN] Loss_G: {train_metrics['loss_G_total']:.4f} | "
+                           f"Loss_D: {train_metrics['loss_D']:.4f} | "
+                           f"PSNR: {train_metrics['psnr']:.2f} dB | "
+                           f"SSIM: {train_metrics['ssim']:.4f}")
+            
+            if val_metrics:
+                self.logger.info(f"[VAL]   Loss_G: {val_metrics['loss_G_total']:.4f} | "
+                               f"PSNR: {val_metrics['psnr']:.2f} dB | "
+                               f"SSIM: {val_metrics['ssim']:.4f} | "
+                               f"RMSE: {val_metrics['rmse']:.4f}")
+            
+            # ============================================
+            # SAVE CHECKPOINT
+            # ============================================
+            current_psnr = val_metrics.get('psnr', train_metrics['psnr'])
+            is_best = current_psnr > self.best_psnr
+            
+            if is_best:
+                self.best_psnr = current_psnr
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+            
+            # Guardar checkpoint
+            if (epoch + 1) % save_frequency == 0 or is_best:
+                metrics_to_save = val_metrics if val_metrics else train_metrics
+                self.save_checkpoint(
+                    epoch=epoch + 1,
+                    metrics=metrics_to_save,
+                    is_best=is_best
+                )
+            
+            # ============================================
+            # EARLY STOPPING
+            # ============================================
+            if epochs_without_improvement >= early_stopping_patience:
+                self.logger.info(f"\nEarly stopping triggered after {early_stopping_patience} "
+                               f"epochs without improvement")
+                self.logger.info(f"Best PSNR: {self.best_psnr:.2f} dB")
+                break
+        
+        # ============================================
+        # FINAL SUMMARY
+        # ============================================
+        self.logger.info("\n" + "="*60)
+        self.logger.info("TRAINING COMPLETED")
+        self.logger.info(f"Total epochs: {epoch + 1}")
+        self.logger.info(f"Best PSNR: {self.best_psnr:.2f} dB (target: 58.27 dB)")
+        self.logger.info(f"Best model saved at: {self.checkpoint_dir / 'best_model.pth'}")
+        self.logger.info("="*60)
+
+
+# ============================================
+# TESTING
+# ============================================
+if __name__ == "__main__":
+    """
+    Test del trainer con datos sintéticos
+    """
+    print("Testing DCTGANTrainer...")
+    
+    # Mock config
+    test_config = {
+        'loss': {
+            'alpha': 0.3,
+            'beta': 15.0,
+            'gamma': 0.03
+        },
+        'training': {
+            'num_epochs': 5,
+            'optimizer': {
+                'generator': {
+                    'lr': 1e-3,
+                    'betas': [0.9, 0.999],
+                    'weight_decay': 0.005
+                },
+                'discriminator': {
+                    'lr': 1e-3,
+                    'momentum': 0.9,
+                    'weight_decay': 0.005
+                }
+            },
+            'lr_scheduler': {
+                'step_size': 2,
+                'gamma': 0.5
+            },
+            'update_strategy': {
+                'generator_updates_per_epoch': 4,
+                'discriminator_updates_per_epoch': 1
+            }
+        }
+    }
+    
+    # Mock model
+    from ..models.gan import DCTGAN
+    
+    encoder_cfg = {'type': 'resnet', 'base_channels': 10, 'num_residual_blocks': 9}
+    decoder_cfg = {'type': 'cnn', 'base_channels': 10, 'num_layers': 6}
+    disc_cfg = {'type': 'xunet_modified', 'base_channels': 4, 'num_conv_layers': 5}
+    
+    model = DCTGAN(encoder_cfg, decoder_cfg, disc_cfg)
+    
+    # Device
+    device = torch.device('cpu')
+    
+    # Create trainer
+    trainer = DCTGANTrainer(
+        model=model,
+        config=test_config,
+        device=device,
+        checkpoint_dir=Path("test_checkpoints"),
+        log_dir=Path("test_logs")
+    )
+    
+    print("\n✅ DCTGANTrainer initialized successfully!")
+    print(f"   - Device: {device}")
+    print(f"   - Loss weights: α=0.3, β=15.0, γ=0.03")
+    print(f"   - Generator optimizer: Adam lr=1e-3")
+    print(f"   - Discriminator optimizer: SGD lr=1e-3")
+    print(f"   - Update strategy: 4:1 (G:D)")
+    print("\nTrainer ready for training!")

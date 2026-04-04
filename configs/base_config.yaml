@@ -1,0 +1,160 @@
+# Configuración Base - Paper Original (Malik et al. 2025)
+# Hybrid DCT-GAN Steganography
+
+project:
+  name: "DCT-GAN-Base"
+  description: "Replicación del paper original"
+  seed: 42
+
+# Dataset Configuration
+data:
+  dataset_name: "ImageNet2012"
+  train_size: 40000  # 20,000 pares de imágenes
+  val_size: 5000     # 2,500 pares
+  test_size: 5000    # 2,500 pares
+  image_size: 256
+  num_workers: 4
+  pin_memory: true
+  batch_size: 32
+
+# Model Architecture
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 10  # Optimizado para ~17K params (análisis)
+    input_channels: 6  # Concatenated cover (3) + secret (3)
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 10  # Optimizado para ~4K params (análisis)
+    output_channels: 3
+    activation: "relu"
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 4  # Optimizado para ~26K params (análisis)
+    kernel_size: 5
+    num_conv_layers: 5
+    activation: "leaky_relu"
+    leaky_slope: 0.2
+    use_srm: false  # Deshabilitado por bug PyTorch 2.10
+
+# DCT Configuration
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"  # Como en el paper
+  embed_in_ac: true  # Evitar coeficientes DC
+
+# Loss Functions (Ecuación 5 del paper)
+loss:
+  alpha: 0.3   # Peso para L_mse
+  beta: 15.0   # Peso para L_crossentropy
+  gamma: 0.03  # Peso para L_adversarial (WGAN)
+  
+  # L_all = alpha*L_mse + beta*L_crossentropy + gamma*L_adversarial
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"  # Wasserstein GAN loss
+    clip_value: 0.01
+
+# Training Configuration
+training:
+  num_epochs: 100
+  
+  optimizer:
+    generator:  # Encoder-Decoder
+      type: "adam"
+      lr: 1.0e-3
+      betas: [0.9, 0.999]
+      weight_decay: 0.005
+    
+    discriminator:
+      type: "sgd"
+      lr: 1.0e-3
+      momentum: 0.9
+      weight_decay: 0.005
+  
+  lr_scheduler:
+    type: "step_lr"
+    step_size: 30
+    gamma: 0.5
+  
+  # Estrategia de actualización (del paper)
+  update_strategy:
+    discriminator_updates_per_epoch: 1
+    generator_updates_per_epoch: 4  # 4x más frecuente
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  mixed_precision:
+    enabled: false  # Para replicación exacta
+  
+  checkpoint:
+    save_every: 5  # epochs
+    keep_top_k: 3
+    monitor: "val_psnr"
+    mode: "max"
+
+# Evaluation Metrics
+metrics:
+  - "psnr"        # Peak Signal-to-Noise Ratio
+  - "ssim"        # Structural Similarity Index
+  - "mse"         # Mean Squared Error
+  - "rmse"        # Root Mean Squared Error
+  - "cc"          # Correlation Coefficient
+  - "ber"         # Bit Error Rate
+  - "capacity"    # Bits per pixel
+  - "fid"         # Fréchet Inception Distance (detectability)
+
+# Logging and Monitoring
+logging:
+  log_dir: "experiments/logs"
+  tensorboard: true
+  wandb:
+    enabled: false
+    project: "dct-gan-steganography"
+  
+  log_every_n_steps: 50
+  
+  save_images:
+    enabled: true
+    num_samples: 8
+    save_every: 10  # epochs
+
+# Hardware Configuration
+hardware:
+  device: "cuda"  # "cuda", "cpu", "mps" (Apple Silicon)
+  gpu_ids: [0]
+  num_gpus: 1
+  precision: "fp32"  # "fp32", "fp16", "bf16"
+
+# Reproducibility
+reproducibility:
+  deterministic: true
+  benchmark: false  # Desactivar para reproducibilidad exacta
+
+# Expected Results (del paper para validación)
+expected_results:
+  psnr: 58.27
+  ssim: 0.942
+  mse: 93.30
+  rmse: 96.10
+  capacity_bpp: 0.039
+  flops_m: 9.51
+  params_k: 49.95

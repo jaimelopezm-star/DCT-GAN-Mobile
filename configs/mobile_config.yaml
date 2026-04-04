@@ -1,0 +1,218 @@
+# Configuración Mobile-StegoNet - Propuesta 1
+# Optimización para Dispositivos Móviles
+
+project:
+  name: "Mobile-StegoNet"
+  description: "Arquitectura optimizada para móviles con MobileNetV3"
+  seed: 42
+
+# Dataset Configuration
+data:
+  dataset_name: "ImageNet2012"
+  train_size: 40000
+  val_size: 5000
+  test_size: 5000
+  image_size: 256
+  num_workers: 4
+  pin_memory: true
+  batch_size: 32  # Puede reducirse a 16 si hay OOM
+
+# Model Architecture - OPTIMIZADO
+model:
+  type: "mobile_dct_gan"
+  
+  encoder:
+    type: "mobilenetv3_small"  # Cambio principal
+    width_multiplier: 1.0
+    input_channels: 6
+    use_se: true  # Squeeze-and-Excitation blocks
+    activation: "hard_swish"
+    dropout_rate: 0.2
+  
+  decoder:
+    type: "lightweight_cnn"
+    num_layers: 5  # Reducido de 6
+    base_channels: 32  # Reducido de 64
+    output_channels: 3
+    activation: "relu"
+    use_depthwise: true  # Depthwise separable convolutions
+  
+  discriminator:
+    type: "efficient_xunet"
+    input_channels: 3
+    kernel_size: 5
+    num_conv_layers: 4  # Reducido de 5
+    base_channels: 32
+    activation: "leaky_relu"
+    leaky_slope: 0.2
+
+# DCT Configuration (igual que base)
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "adaptive"
+  embed_in_ac: true
+  quantization:
+    enabled: true
+    bits: 16  # 16-bit quantization para DCT
+
+# Loss Functions (ajustados para mobile)
+loss:
+  alpha: 0.3
+  beta: 12.0   # Reducido de 15.0
+  gamma: 0.05  # Incrementado de 0.03 para mejor entrenamiento
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan_gp"  # WGAN con gradient penalty
+    lambda_gp: 10.0
+
+# Training Configuration
+training:
+  num_epochs: 120  # Más épocas por menor capacidad
+  
+  optimizer:
+    generator:
+      type: "adamw"  # AdamW para mejor regularización
+      lr: 5.0e-4     # Menor learning rate
+      betas: [0.9, 0.999]
+      weight_decay: 0.01
+    
+    discriminator:
+      type: "adam"
+      lr: 5.0e-4
+      betas: [0.9, 0.999]
+      weight_decay: 0.01
+  
+  lr_scheduler:
+    type: "cosine_annealing"
+    T_max: 120
+    eta_min: 1.0e-6
+  
+  update_strategy:
+    discriminator_updates_per_epoch: 1
+    generator_updates_per_epoch: 3
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 0.5  # Más conservador
+  
+  mixed_precision:
+    enabled: true  # Activar para eficiencia
+  
+  checkpoint:
+    save_every: 5
+    keep_top_k: 5
+    monitor: "val_psnr"
+    mode: "max"
+
+# Knowledge Distillation (opcional)
+distillation:
+  enabled: false
+  teacher_checkpoint: "checkpoints/base_best_model.pth"
+  temperature: 4.0
+  alpha: 0.7  # Peso para distillation loss
+
+# Pruning Configuration
+pruning:
+  enabled: false  # Activar después del entrenamiento inicial
+  method: "magnitude"  # "magnitude", "structured", "lottery_ticket"
+  sparsity: 0.3  # 30% de poda
+  schedule: "iterative"
+
+# Quantization Configuration
+quantization:
+  enabled: false  # Activar después del entrenamiento
+  method: "post_training_static"  # o "quantization_aware_training"
+  dtype: "int8"
+  calibration_batches: 100
+
+# Mobile Deployment
+mobile:
+  target_platform: "android"
+  
+  tflite:
+    convert: true
+    optimization: "DEFAULT"  # DEFAULT, OPTIMIZE_FOR_SIZE, OPTIMIZE_FOR_LATENCY
+    representative_dataset_size: 100
+  
+  onnx:
+    convert: true
+    opset_version: 14
+    simplify: true
+  
+  coreml:
+    convert: false  # Para iOS
+  
+  # Métricas objetivo
+  targets:
+    inference_time_ms: 500     # CPU
+    memory_mb: 50
+    model_size_mb: 20
+    psnr_min: 56.0
+    ssim_min: 0.92
+
+# Evaluation Metrics (mismo que base)
+metrics:
+  - "psnr"
+  - "ssim"
+  - "mse"
+  - "rmse"
+  - "cc"
+  - "ber"
+  - "capacity"
+  - "fid"
+  - "inference_time"  # Agregado
+  - "memory_usage"    # Agregado
+  - "flops"           # Agregado
+  - "params"          # Agregado
+
+# Logging
+logging:
+  log_dir: "experiments/mobile_logs"
+  tensorboard: true
+  wandb:
+    enabled: false
+    project: "mobile-stegonet"
+  
+  log_every_n_steps: 50
+  
+  save_images:
+    enabled: true
+    num_samples: 8
+    save_every: 10
+  
+  profiling:
+    enabled: true
+    profile_memory: true
+    profile_time: true
+
+# Hardware Configuration
+hardware:
+  device: "cuda"
+  gpu_ids: [0]
+  num_gpus: 1
+  precision: "fp16"  # Mixed precision activado
+
+# Reproducibility
+reproducibility:
+  deterministic: true
+  benchmark: false
+
+# Expected Results (objetivos de la propuesta)
+expected_results:
+  psnr_min: 56.0
+  ssim_min: 0.92
+  capacity_bpp: 0.035
+  flops_m: 4.0      # 60% reducción
+  params_k: 20.0    # 60% reducción
+  inference_time_ms: 500
+  memory_mb: 50
+  model_size_mb: 20

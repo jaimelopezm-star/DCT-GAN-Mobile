@@ -1,0 +1,76 @@
+# Configuración temporal para testing rápido
+# Generada automáticamente por quick_setup.py
+
+project_name: "DCT-GAN-Test"
+
+model:
+  encoder:
+    type: "resnet"
+    base_channels: 10
+    num_residual_blocks: 9
+  
+  decoder:
+    type: "cnn"
+    base_channels: 10
+    num_layers: 6
+  
+  discriminator:
+    type: "xunet_modified"
+    base_channels: 4
+    num_layers: 5
+
+data:
+  dataset_name: "Synthetic"  # Testing only
+  image_size: 256
+  batch_size: 16  # Reducido para testing rápido
+  num_workers: 2  # Reducido
+  pin_memory: true
+  
+  # Tamaños reducidos para testing
+  train_size: 100
+  val_size: 20
+  test_size: 20
+
+training:
+  num_epochs: 2  # Solo 2 epochs para validación rápida
+  
+  # Loss weights (Ecuación 5)
+  loss_weights:
+    alpha: 0.3    # MSE weight
+    beta: 15.0    # BCE weight
+    gamma: 0.03   # Adversarial weight
+    lambda_gp: 10.0  # Gradient penalty
+  
+  # Optimizers
+  optimizer_G:
+    type: "Adam"
+    lr: 0.001
+    betas: [0.9, 0.999]
+    weight_decay: 0.005
+  
+  optimizer_D:
+    type: "SGD"
+    lr: 0.001
+    momentum: 0.9
+    weight_decay: 0.005
+  
+  # Scheduler
+  scheduler:
+    type: "StepLR"
+    step_size: 30
+    gamma: 0.5
+  
+  # Training strategy
+  update_strategy:
+    generator_updates_per_epoch: 4
+    discriminator_updates_per_epoch: 1
+  
+  # Early stopping
+  early_stopping:
+    patience: 10  # Reducido para testing
+    min_delta: 0.01
+
+logging:
+  log_frequency: 1  # Log cada batch para testing
+  save_frequency: 1  # Guardar cada epoch
+  tensorboard: false  # Deshabilitado para testing

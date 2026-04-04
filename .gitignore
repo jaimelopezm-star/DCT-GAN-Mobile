@@ -1,0 +1,141 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data
+data/raw/
+data/processed/
+data/BOSSBase/
+data/ImageNet/
+data/imagenet2012/
+data/USC-SIPI/
+data/WhatsApp-Compressed/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+!docs/images/*.png
+!docs/images/*.jpg
+
+# Model Checkpoints
+checkpoints/
+checkpoints_test/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.pb
+!checkpoints/.gitkeep
+
+# Training Logs
+logs/
+logs_test/
+
+# Experiment Logs
+experiments/logs/
+experiments/runs/
+wandb/
+mlruns/
+*.log
+
+# TensorBoard
+events.out.tfevents.*
+
+# Output Files
+outputs/
+results/
+*.csv
+*.xlsx
+!results/paper_metrics.csv
+
+# Compiled Models
+*.onnx
+*.tflite
+*.mlmodel
+*.pt2
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Coverage Reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# Profiling
+*.prof
+*.lprof
+
+# LaTeX (for paper writing)
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.synctex.gz
+
+# Backup Files
+*.bak
+*.backup
+*~
+
+# Large Files
+*.tar
+*.tar.gz
+*.zip
+*.rar
+*.7z
