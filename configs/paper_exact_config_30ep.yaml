@@ -1,0 +1,131 @@
+# ✅ Config para VALIDACIÓN RÁPIDA del fix 5D:1G (30 epochs)
+# Basado en paper_exact_config.yaml pero con duración reducida
+
+project:
+  name: "DCT-GAN-Fix-5D1G-Test"
+  description: "Test rápido del fix discriminator 5D:1G"
+  seed: 42
+
+# Dataset Configuration
+data:
+  dataset_name: "ImageNet2012"
+  train_size: 40000
+  val_size: 5000
+  test_size: 5000
+  image_size: 256
+  num_workers: 4
+  pin_memory: true
+  batch_size: 32
+
+# Model Architecture - PAPER EXACT
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 16
+    input_channels: 6
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 16
+    output_channels: 3
+    activation: "relu"
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 8
+    kernel_size: 5
+    num_conv_layers: 5
+    activation: "leaky_relu"
+    leaky_slope: 0.2
+    use_srm: false
+
+# DCT Configuration
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# Loss Functions (Ecuación 5)
+loss:
+  alpha: 0.3
+  beta: 15.0
+  gamma: 0.03
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# Training Configuration
+training:
+  num_epochs: 30                # ⚠️ REDUCIDO para test rápido (~$1.00)
+  
+  # CRITICAL FIX: 5D:1G ratio
+  update_strategy:
+    discriminator_updates_per_batch: 5
+    generator_updates_per_batch: 1
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3
+      betas: [0.9, 0.999]
+      weight_decay: 0.005
+    
+    discriminator:
+      type: "sgd"
+      lr: 1.0e-2
+      momentum: 0.9
+      weight_decay: 0.005
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step"
+  step_size: 30
+  gamma: 0.1
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10
+  save_frequency: 5              # Guardar cada 5 epochs en test rápido
+  
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early Stopping (deshabilitado para test corto)
+early_stopping:
+  enabled: false
+
+# 🎯 OBJETIVOS DE ESTA PRUEBA (30 epochs):
+# Si el fix 5D:1G funciona, deberías ver en los primeros 10 epochs:
+# - Loss_D: 0.01-0.10 (NO 0.0000) ✅
+# - D(real): 0.70-0.90 (NO 0.50) ✅
+# - D(fake): 0.10-0.30 (NO 0.50) ✅
+# - PSNR: 25-35 dB al epoch 30 (objetivo intermedio)
+#
+# 📋 DECISIÓN DESPUÉS DE 30 EPOCHS:
+# - Si PSNR >30 dB → Continuar a 100 epochs con paper_exact_config.yaml
+# - Si PSNR <25 dB → Probar BOSSBase dataset
+# - Si Loss_D ≈ 0 → Fix insuficiente, contactar autores
