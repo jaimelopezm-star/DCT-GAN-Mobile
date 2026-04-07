@@ -96,7 +96,7 @@ class XuNetDiscriminator(nn.Module):
     def __init__(
         self,
         input_channels=3,
-        base_channels=16,  # Paper Malik et al. 2025: XuNet modificado (estimado para ~24K params)
+        base_channels=8,  # Balanced for ~10K params
         num_conv_layers=5,
         use_srm=False  # Deshabilitado por bug PyTorch 2.10
     ):

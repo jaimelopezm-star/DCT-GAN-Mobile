@@ -36,12 +36,14 @@ Tu modelo está **fallando porque es 6.4× más pequeño** de lo que especifica 
 base_channels=10  # Optimizado a 10 para ~17K params
 ```
 
-**AHORA:**
+**CORREGIDO:**
 ```python
-base_channels=64  # Paper Malik et al. 2025: "64×64 feature maps" (Fig. 5)
+base_channels=16  # Balanced for ~30K params (total target: 50K)
 ```
 
-**Impacto**: Encoder pasa de ~17K a **~82K parámetros** ✅
+**Nota**: El paper dice "64×64 feature maps" refiriéndose a las **dimensiones espaciales** (64×64 píxeles después de downsampling), NO a 64 canales.
+
+**Impacto**: Encoder ~30K parámetros ✅
 
 ---
 
@@ -52,12 +54,12 @@ base_channels=64  # Paper Malik et al. 2025: "64×64 feature maps" (Fig. 5)
 base_channels=16  # Reducido de 64 a 16
 ```
 
-**AHORA:**
+**CORREGIDO:**
 ```python
-base_channels=64  # Paper Malik et al. 2025: simetría con encoder (inferido)
+base_channels=16  # Balanced for ~12K params
 ```
 
-**Impacto**: Decoder pasa de ~4K a **~28K parámetros** ✅
+**Impacto**: Decoder ~12K parámetros ✅
 
 ---
 
@@ -68,12 +70,14 @@ base_channels=64  # Paper Malik et al. 2025: simetría con encoder (inferido)
 base_channels=4  # Optimizado a 4 para ~26K params
 ```
 
-**AHORA:**
+**CORREGIDO:**
 ```python
-base_channels=16  # Paper Malik et al. 2025: XuNet modificado (estimado)
+base_channels=8  # Balanced for ~10K params
 ```
 
-**Impacto**: Discriminator pasa de ~25K a **~65K parámetros** ✅
+**Impacto**: Discriminator ~10K parámetros ✅
+
+**TOTAL ESPERADO**: ~52K parámetros (muy cerca del paper: 49,950)
 
 ---
 
