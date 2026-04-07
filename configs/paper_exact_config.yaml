@@ -1,0 +1,145 @@
+# ✅ Configuración EXACTA del Paper Original
+# Paper: Malik et al., Scientific Reports 2025, vol 15, artículo 19630
+# DOI: 10.1038/s41598-025-01054-7
+
+# 🎯 OBJETIVO: Replicar EXACTAMENTE la arquitectura y métricas reportadas
+# - PSNR: 58.27 dB (vs 12.77 actual)
+# - SSIM: 94.20% (vs 51% actual)
+# - Params: ~50,000 (vs 45,998 actual)
+
+project:
+  name: "DCT-GAN-Paper-Exact"
+  description: "Replicación EXACTA del paper Malik et al. 2025"
+  seed: 42
+
+# Dataset Configuration (Tabla 2 del paper)
+data:
+  dataset_name: "ImageNet2012"
+  train_size: 40000  # Paper usa dataset grande
+  val_size: 5000
+  test_size: 5000
+  image_size: 256    # Paper: 256×256 (Tabla 2)
+  num_workers: 4
+  pin_memory: true
+  batch_size: 32     # Paper: batch_size = 32 (Tabla 2)
+
+# Model Architecture - PAPER EXACT
+model:
+  type: "dct_gan"
+  
+  # ENCODER (Figura 5 del paper)
+  # Paper: "64×64 feature maps" con 9 bloques residuales
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9        # ✅ Paper: 9 bloques (Figura 5)
+    base_channels: 64             # ✅ Paper: "64×64 feature maps" (Página 8)
+    input_channels: 6             # ✅ Cover(3) + Secret(3)
+  
+  # DECODER (Figura 5 del paper)  
+  # Paper: "6 capas convolucionales completamente conectadas"
+  decoder:
+    type: "cnn"
+    num_layers: 6                 # ✅ Paper: 6 capas (Página 8)
+    base_channels: 64             # ✅ Inferido del encoder (simetría)
+    output_channels: 3
+    activation: "relu"            # ✅ Paper: ReLU (Figura 5)
+  
+  # DISCRIMINATOR (Página 8-9 del paper)
+  # Paper: "XuNet modificado con kernel KV de 5×5 para 3 canales"
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 16             # ✅ Estimado para ~24K params
+    kernel_size: 5                # ✅ Paper: kernel 5×5 (Página 9)
+    num_conv_layers: 5            # ✅ Paper: "5 capas" (Página 9)
+    activation: "leaky_relu"      # ✅ Común en XuNet
+    leaky_slope: 0.2
+    use_srm: false
+
+# DCT Configuration (Ecuaciones 1-2 del paper)
+dct:
+  block_size: 8                   # ✅ Paper: bloques 8×8 (Figura 3)
+  use_zig_zag: true               # ✅ Paper: patrón Zig-Zag (Figura 3)
+  frequency_selection: "chaotic_map"  # ✅ Paper: mapa caótico (Ecuaciones 3-4)
+  embed_in_ac: true               # ✅ Solo coeficientes AC, no DC
+
+# Loss Functions - PAPER EXACT (Ecuación 5)
+# L_all = α*L_mse + β*L_inf + γ*L_e
+loss:
+  alpha: 0.3      # ✅ Paper: α = 0.3 (Página 9)
+  beta: 15.0      # ✅ Paper: β = 15 (Página 9)
+  gamma: 0.03     # ✅ Paper: γ = 0.03 (Página 9)
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"              # ✅ Paper: WGAN (Página 9)
+    clip_value: 0.01
+
+# Training Configuration - PAPER EXACT (Tabla 2)
+training:
+  num_epochs: 100               # ✅ Paper: 100 épocas (Tabla 2)
+  
+  optimizer:
+    generator:
+      type: "adam"              # ✅ Paper: Adam (Tabla 2)
+      lr: 1.0e-3                # ✅ Paper: 1×10^-3 (Tabla 2)
+      betas: [0.9, 0.999]
+      weight_decay: 0.005
+    
+    discriminator:
+      type: "sgd"               # ✅ Paper: SGD (Tabla 2)
+      lr: 1.0e-2                # ✅ Paper: 1×10^-2 (Tabla 2)
+      momentum: 0.9
+      weight_decay: 0.005
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step"
+  step_size: 30
+  gamma: 0.1
+
+# Hardware (Tabla 2 del paper)
+hardware:
+  device: "cuda"
+  num_gpus: 1                   # Paper: 1× RTX 3090 24GB
+  mixed_precision: false        # Paper no menciona AMP
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10             # Cada 10 batches
+  save_frequency: 10            # Cada 10 épocas
+  
+  metrics:
+    - psnr                      # ✅ Paper: PSNR = 58.27 dB
+    - ssim                      # ✅ Paper: SSIM = 94.20%
+    - mse                       # ✅ Paper: MSE = 93.30%
+    - rmse                      # ✅ Paper: RMSE = 96.10%
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 50                  # Dar tiempo suficiente para converger
+  metric: "psnr"
+  mode: "max"                   # Maximizar PSNR
+
+# 🎯 MÉTRICAS OBJETIVO (Tabla 3 del paper)
+# Después de 100 épocas deberías ver:
+# - PSNR: ~58 dB (actualmente: 12.77 dB - ❌)
+# - SSIM: ~0.94 (actualmente: 0.51 - ❌)
+# - MSE: Bajo (actualmente: Alto - ❌)
+# - Loss_D: Positivo y estable (actualmente: ~0 - ❌)
+
+# 📋 NOTAS DE IMPLEMENTACIÓN:
+# 1. El encoder DEBE tener base_channels=64 (no 10)
+# 2. El decoder DEBE tener base_channels=64 (no 10)  
+# 3. El discriminator DEBE ser más fuerte (base_channels=16, no 4)
+# 4. Total de parámetros debe estar cerca de 50K (no 46K)
+# 5. Learning rate del generador: 1e-3 (ya probamos 2e-4, volver a original)
+# 6. Optimizador del discriminador: SGD con lr=1e-2 (no Adam)

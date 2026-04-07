@@ -62,7 +62,7 @@ class ResNetEncoder(nn.Module):
     def __init__(
         self,
         input_channels=6,
-        base_channels=10,  # Optimizado a 10 para ~17K params (análisis)
+        base_channels=64,  # Paper Malik et al. 2025: "64×64 feature maps" (Fig. 5)
         num_residual_blocks=9
     ):
         super(ResNetEncoder, self).__init__()

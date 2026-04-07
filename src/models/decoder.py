@@ -30,7 +30,7 @@ class CNNDecoder(nn.Module):
     
     def __init__(
         self,
-        base_channels=16,  # Reducido de 64 a 16
+        base_channels=64,  # Paper Malik et al. 2025: simetría con encoder (inferido)
         num_layers=6,
         output_channels=3
     ):
