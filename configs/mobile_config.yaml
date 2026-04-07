@@ -97,8 +97,8 @@ training:
     eta_min: 1.0e-6
   
   update_strategy:
-    discriminator_updates_per_epoch: 1
-    generator_updates_per_epoch: 3
+    discriminator_updates_per_batch: 5  # CRITICAL FIX: 5×D typical ratio
+    generator_updates_per_batch: 1      # 1×G
   
   gradient_clipping:
     enabled: true

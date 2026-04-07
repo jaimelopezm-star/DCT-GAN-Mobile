@@ -188,8 +188,10 @@ class DCTGANTrainer:
         """
         Entrena una época completa
         
-        Implementa estrategia 4:1:
-        - 4 actualizaciones del generator por cada actualización del discriminator
+        Implementa estrategia 5:1 (D:G):
+        - 5 actualizaciones del DISCRIMINATOR por cada actualización del GENERATOR
+        - Esto es lo "típico" según el paper (Training Generator section)
+        - El paper reportó usar 4:1 (G:D) pero eso causa Loss_D≈0
         
         Args:
             train_loader: DataLoader con imágenes de entrenamiento
@@ -199,10 +201,12 @@ class DCTGANTrainer:
         """
         self.model.train()
         
-        # Contadores para estrategia 4:1
+        # CRITICAL FIX: Cambiar ratio a 5D:1G (típico y funcional)
+        # Paper dice: "Typically, the discriminator weights are updated
+        # five times, followed by a single update to the generator weights"
         update_strategy = self.config.get('training', {}).get('update_strategy', {})
-        gen_updates_per_batch = update_strategy.get('generator_updates_per_epoch', 4)
-        disc_updates_per_batch = update_strategy.get('discriminator_updates_per_epoch', 1)
+        disc_updates_per_batch = update_strategy.get('discriminator_updates_per_batch', 5)
+        gen_updates_per_batch = update_strategy.get('generator_updates_per_batch', 1)
         
         # Acumuladores de métricas
         epoch_metrics = {
@@ -233,8 +237,14 @@ class DCTGANTrainer:
             # ============================================
             # 1. ENTRENAR DISCRIMINATOR
             # ============================================
+            # CRITICAL: Acumular pérdidas de las 5 iteraciones y promediar
+            d_loss_accum = 0.0
+            d_gp_accum = 0.0
+            d_real_accum = 0.0
+            d_fake_accum = 0.0
+            
             for _ in range(disc_updates_per_batch):
-                self.optimizer_D.zero_grad()
+                self.optimizer_D.zero_grad(set_to_none=True)  # Más eficiente
                 
                 # Forward pass del generator (sin gradientes para encoder/decoder)
                 with torch.no_grad():
@@ -264,12 +274,30 @@ class DCTGANTrainer:
                 # Backward
                 loss_D_total.backward()
                 self.optimizer_D.step()
+                
+                # Acumular para promedio
+                d_loss_accum += loss_D.item()
+                d_gp_accum += gp.item()
+                d_real_accum += disc_metrics['D_real']
+                d_fake_accum += disc_metrics['D_fake']
+            
+            # Promediar métricas de discriminador
+            loss_D_avg = d_loss_accum / disc_updates_per_batch
+            gp_avg = d_gp_accum / disc_updates_per_batch
+            d_real_avg = d_real_accum / disc_updates_per_batch
+            d_fake_avg = d_fake_accum / disc_updates_per_batch
             
             # ============================================
             # 2. ENTRENAR GENERATOR (ENCODER + DECODER)
             # ============================================
+            # CRITICAL: Acumular pérdidas (aunque sea 1 iteración, por consistencia)
+            g_loss_accum = 0.0
+            g_mse_accum = 0.0
+            g_bce_accum = 0.0
+            g_adv_accum = 0.0
+            
             for _ in range(gen_updates_per_batch):
-                self.optimizer_G.zero_grad()
+                self.optimizer_G.zero_grad(set_to_none=True)
                 
                 # Forward pass completo
                 stego, recovered_secret = self.model(cover, secret, mode='full')
@@ -289,6 +317,18 @@ class DCTGANTrainer:
                 # Backward
                 loss_G.backward()
                 self.optimizer_G.step()
+                
+                # Acumular para promedio
+                g_loss_accum += gen_metrics['loss_total']
+                g_mse_accum += gen_metrics['loss_mse']
+                g_bce_accum += gen_metrics['loss_bce']
+                g_adv_accum += gen_metrics['loss_adv']
+            
+            # Promediar métricas de generator
+            loss_G_avg = g_loss_accum / gen_updates_per_batch
+            g_mse_avg = g_mse_accum / gen_updates_per_batch
+            g_bce_avg = g_bce_accum / gen_updates_per_batch
+            g_adv_avg = g_adv_accum / gen_updates_per_batch
             
             # ============================================
             # 3. CALCULAR MÉTRICAS
@@ -300,22 +340,24 @@ class DCTGANTrainer:
                 # SSIM (cover vs stego)
                 ssim = calculate_ssim(cover, stego)
                 
-                # Acumular métricas
-                epoch_metrics['loss_G_total'] += gen_metrics['loss_total']
-                epoch_metrics['loss_G_mse'] += gen_metrics['loss_mse']
-                epoch_metrics['loss_G_bce'] += gen_metrics['loss_bce']
-                epoch_metrics['loss_G_adv'] += gen_metrics['loss_adv']
-                epoch_metrics['loss_D'] += disc_metrics['loss_discriminator']
-                epoch_metrics['loss_GP'] += gp.item()
+                # Acumular métricas (usar promedios calculados)
+                epoch_metrics['loss_G_total'] += loss_G_avg
+                epoch_metrics['loss_G_mse'] += g_mse_avg
+                epoch_metrics['loss_G_bce'] += g_bce_avg
+                epoch_metrics['loss_G_adv'] += g_adv_avg
+                epoch_metrics['loss_D'] += loss_D_avg
+                epoch_metrics['loss_GP'] += gp_avg
                 epoch_metrics['psnr'] += psnr.item()
                 epoch_metrics['ssim'] += ssim
-                epoch_metrics['D_real'] += disc_metrics['D_real']
-                epoch_metrics['D_fake'] += disc_metrics['D_fake']
+                epoch_metrics['D_real'] += d_real_avg
+                epoch_metrics['D_fake'] += d_fake_avg
             
-            # Actualizar progress bar
+            # Actualizar progress bar (usar promedios)
             pbar.set_postfix({
-                'L_G': f"{gen_metrics['loss_total']:.4f}",
-                'L_D': f"{disc_metrics['loss_discriminator']:.4f}",
+                'L_G': f"{loss_G_avg:.4f}",
+                'L_D': f"{loss_D_avg:.4f}",
+                'D(x)': f"{d_real_avg:.3f}",  # D(real) - debe estar cerca de 1
+                'D(G(z))': f"{d_fake_avg:.3f}",  # D(fake) - debe estar cerca de 0
                 'PSNR': f"{psnr.item():.2f} dB",
                 'SSIM': f"{ssim:.4f}"
             })

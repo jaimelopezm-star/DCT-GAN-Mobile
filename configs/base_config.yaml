@@ -95,8 +95,8 @@ training:
   
   # Estrategia de actualización (del paper)
   update_strategy:
-    discriminator_updates_per_epoch: 1
-    generator_updates_per_epoch: 4  # 4x más frecuente
+    discriminator_updates_per_batch: 5  # CRITICAL FIX: 5×D typical ratio
+    generator_updates_per_batch: 1      # 1×G (not 4×G which causes Loss_D≈0)
   
   gradient_clipping:
     enabled: true
