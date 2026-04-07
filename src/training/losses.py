@@ -99,20 +99,23 @@ class WassersteinGANLoss(nn.Module):
                           real_validity: torch.Tensor, 
                           fake_validity: torch.Tensor) -> torch.Tensor:
         """
-        Loss del discriminador
+        Loss del discriminador (Wasserstein Distance)
         
         Args:
             real_validity: D(real) [B, 1]
             fake_validity: D(fake) [B, 1]
             
         Returns:
-            Discriminator loss (queremos maximizar distancia)
+            Discriminator loss (negated Wasserstein distance for gradient descent)
         """
-        # Wasserstein loss: E[D(fake)] - E[D(real)]
+        # Wasserstein loss: -(E[D(real)] - E[D(fake)])
+        # El negativo convierte maximización en minimización para gradient descent
         # Discriminador quiere:
-        #   - D(real) alto (→ loss negativo)
-        #   - D(fake) bajo (→ loss positivo)
-        loss_d = fake_validity.mean() - real_validity.mean()
+        #   - D(real) alto
+        #   - D(fake) bajo
+        #   - Maximizar: D(real) - D(fake)
+        #   - Con negativo: Minimizar -(D(real) - D(fake))
+        loss_d = -(real_validity.mean() - fake_validity.mean())
         return loss_d
     
     def generator_loss(self, fake_validity: torch.Tensor) -> torch.Tensor:

@@ -388,7 +388,7 @@ def main():
             val_loader=val_loader,
             num_epochs=num_epochs,
             save_frequency=10,
-            early_stopping_patience=20
+            early_stopping_patience=50  # Aumentado de 20 a 50 para dar más margen
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Training interrupted by user")
