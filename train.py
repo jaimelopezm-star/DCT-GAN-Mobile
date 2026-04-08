@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from models.gan import DCTGAN
 from training.trainer import DCTGANTrainer
+from data.bossbase_dataset import BOSSBaseDataset
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 from PIL import Image
@@ -124,14 +125,14 @@ def load_config(config_path: Path) -> dict:
     return config
 
 
-def create_dataloaders(config: dict, use_real_data: bool = False, dataset_path: str = None) -> tuple:
+def create_dataloaders(config: dict, dataset_type: str = 'synthetic', dataset_path: str = None) -> tuple:
     """
     Crea DataLoaders de entrenamiento y validación
     
     Args:
         config: Diccionario de configuración
-        use_real_data: Si True, usa ImageNet real. Si False, datos sintéticos.
-        dataset_path: Path al dataset real (ImageNet)
+        dataset_type: 'synthetic', 'imagenet', o 'bossbase'
+        dataset_path: Path al dataset real (ImageNet o BOSSBase)
         
     Returns:
         (train_loader, val_loader)
@@ -145,7 +146,37 @@ def create_dataloaders(config: dict, use_real_data: bool = False, dataset_path: 
     pin_memory = data_config.get('pin_memory', True)
     image_size = data_config.get('image_size', 256)
     
-    if use_real_data and dataset_path:
+    if dataset_type == 'bossbase':
+        # ============================================
+        # BOSSBASE DATASET (Real grayscale images)
+        # ============================================
+        print("\n📊 Usando dataset BOSSBase (imágenes reales)")
+        print(f"   Path: {dataset_path}")
+        
+        if not dataset_path:
+            print("❌ Error: --dataset-path requerido para BOSSBase")
+            print("   Uso: --dataset bossbase --dataset-path /workspace/BOSSbase_prepared")
+            raise ValueError("dataset_path requerido para BOSSBase")
+        
+        # Verificar dataset
+        success, message = BOSSBaseDataset.verify_dataset(dataset_path)
+        if not success:
+            print(f"❌ Error: {message}")
+            print("\n   Ejecuta primero:")
+            print("   python prepare_bossbase.py --source /workspace/BOSSbase --output /workspace/BOSSbase_prepared")
+            raise ValueError("BOSSBase dataset no preparado")
+        
+        print(f"✅ {message}")
+        
+        # Cargar splits
+        train_dataset = BOSSBaseDataset(dataset_path, split='train')
+        val_dataset = BOSSBaseDataset(dataset_path, split='val')
+        
+        print(f"✅ BOSSBase cargado:")
+        print(f"   - Train: {len(train_dataset)} pares")
+        print(f"   - Val: {len(val_dataset)} pares")
+    
+    elif dataset_type == 'imagenet' and dataset_path:
         # ============================================
         # DATASET REAL (ImageNet)
         # ============================================
@@ -182,7 +213,7 @@ def create_dataloaders(config: dict, use_real_data: bool = False, dataset_path: 
             print(f"   - Train: {len(train_dataset)} pares")
             print(f"   - Val: {len(val_dataset)} pares")
     
-    if not use_real_data:
+    else:
         # ============================================
         # DATASET SINTÉTICO (solo para testing)
         # ============================================
@@ -284,8 +315,8 @@ def main():
     parser.add_argument('--log_dir', type=str, default='logs',
                        help='Directory to save logs')
     parser.add_argument('--dataset', type=str, default='synthetic',
-                       choices=['synthetic', 'imagenet'],
-                       help='Dataset to use (synthetic for testing, imagenet for paper replication)')
+                       choices=['synthetic', 'imagenet', 'bossbase'],
+                       help='Dataset to use (synthetic/imagenet/bossbase)')
     parser.add_argument('--dataset-path', type=str, default='data/imagenet2012/splits',
                        help='Path to ImageNet splits (if using --dataset imagenet)')
     
@@ -340,11 +371,10 @@ def main():
     
     # Crear DataLoaders
     print(f"\n5. Creating dataloaders...")
-    use_real_data = (args.dataset == 'imagenet')
     train_loader, val_loader = create_dataloaders(
         config, 
-        use_real_data=use_real_data,
-        dataset_path=args.dataset_path if use_real_data else None
+        dataset_type=args.dataset,
+        dataset_path=args.dataset_path if args.dataset in ['imagenet', 'bossbase'] else None
     )
     
     # Crear trainer
