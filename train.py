@@ -370,12 +370,17 @@ def main():
     # Configuración de entrenamiento
     num_epochs = config.get('training', {}).get('num_epochs', 100)
     
+    # Get update strategy from config
+    update_strategy = config.get('training', {}).get('update_strategy', {})
+    disc_updates = update_strategy.get('discriminator_updates_per_batch', 5)
+    gen_updates = update_strategy.get('generator_updates_per_batch', 1)
+    
     print(f"\n{'='*70}")
     print(f"STARTING TRAINING")
     print(f"{'='*70}")
     print(f"Epochs: {num_epochs}")
     print(f"Batch size: {config.get('data', {}).get('batch_size', 32)}")
-    print(f"Strategy: 4:1 (Generator:Discriminator)")
+    print(f"Strategy: {disc_updates}:{gen_updates} (Discriminator:Generator)")
     print(f"Optimizer G: Adam lr={config.get('training', {}).get('optimizer', {}).get('generator', {}).get('lr', 1e-3)}")
     print(f"Optimizer D: SGD lr={config.get('training', {}).get('optimizer', {}).get('discriminator', {}).get('lr', 1e-3)}")
     print(f"Loss weights: α=0.3, β=15.0, γ=0.03")

@@ -87,7 +87,7 @@ training:
     
     discriminator:
       type: "sgd"
-      lr: 1.0e-2
+      lr: 1.0e-3        # REDUCED from 1e-2 to prevent discriminator collapse
       momentum: 0.9
       weight_decay: 0.005
 
