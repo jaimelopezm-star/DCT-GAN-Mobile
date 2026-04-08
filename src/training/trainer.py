@@ -394,11 +394,15 @@ class DCTGANTrainer:
             # 3. CALCULAR MÉTRICAS
             # ============================================
             with torch.no_grad():
+                # Convert to float32 for metrics (AMP compatibility)
+                cover_f32 = cover.float()
+                stego_f32 = stego.float()
+                
                 # PSNR (cover vs stego)
-                psnr = calculate_psnr(cover, stego, max_val=1.0)
+                psnr = calculate_psnr(cover_f32, stego_f32, max_val=1.0)
                 
                 # SSIM (cover vs stego)
-                ssim = calculate_ssim(cover, stego)
+                ssim = calculate_ssim(cover_f32, stego_f32)
                 
                 # Acumular métricas (usar promedios calculados)
                 epoch_metrics['loss_G_total'] += loss_G_avg
@@ -456,25 +460,32 @@ class DCTGANTrainer:
                 cover = batch['cover'].to(self.device)
                 secret = batch['secret'].to(self.device)
                 
-                # Forward pass
-                stego, recovered_secret = self.model(cover, secret, mode='full')
+                # Forward pass con AMP
+                with autocast(enabled=self.use_amp):
+                    # Forward pass
+                    stego, recovered_secret = self.model(cover, secret, mode='full')
+                    
+                    # Discriminator output
+                    fake_validity = self.model.discriminator(stego)
+                    
+                    # Generator loss
+                    loss_G, _ = self.hybrid_loss.generator_loss(
+                        cover_image=cover,
+                        stego_image=stego,
+                        secret_original=secret,
+                        secret_recovered=recovered_secret,
+                        discriminator_output=fake_validity
+                    )
                 
-                # Discriminator output
-                fake_validity = self.model.discriminator(stego)
+                # Métricas (convert to float32 for AMP compatibility)
+                cover_f32 = cover.float()
+                stego_f32 = stego.float()
+                secret_f32 = secret.float()
+                recovered_secret_f32 = recovered_secret.float()
                 
-                # Generator loss
-                loss_G, _ = self.hybrid_loss.generator_loss(
-                    cover_image=cover,
-                    stego_image=stego,
-                    secret_original=secret,
-                    secret_recovered=recovered_secret,
-                    discriminator_output=fake_validity
-                )
-                
-                # Métricas
-                psnr = calculate_psnr(cover, stego, max_val=1.0)
-                ssim = calculate_ssim(cover, stego)
-                rmse = calculate_rmse(secret, recovered_secret)
+                psnr = calculate_psnr(cover_f32, stego_f32, max_val=1.0)
+                ssim = calculate_ssim(cover_f32, stego_f32)
+                rmse = calculate_rmse(secret_f32, recovered_secret_f32)
                 
                 # Acumular
                 val_metrics['loss_G_total'] += loss_G.item()
