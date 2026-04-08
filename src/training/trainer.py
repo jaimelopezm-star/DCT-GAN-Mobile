@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from pathlib import Path
 import time
 from typing import Dict, Tuple, Optional, List
@@ -70,6 +71,9 @@ class DCTGANTrainer:
         
         # Optimizers and schedulers
         self._setup_optimizers()
+        
+        # Mixed Precision and Gradient Clipping
+        self._setup_training_optimizations()
         
         # Training state
         self.current_epoch = 0
@@ -184,6 +188,34 @@ class DCTGANTrainer:
         self.logger.info(f"Discriminator optimizer: SGD lr={disc_lr}")
         self.logger.info(f"Scheduler: StepLR step_size={step_size}, gamma={gamma}")
     
+    def _setup_training_optimizations(self):
+        """
+        Configura optimizaciones de entrenamiento:
+        - Mixed Precision (AMP) para velocidad
+        - Gradient Clipping para estabilidad
+        """
+        train_config = self.config.get('training', {})
+        hardware_config = self.config.get('hardware', {})
+        
+        # Mixed Precision (AMP)
+        self.use_amp = hardware_config.get('mixed_precision', False)
+        self.scaler = GradScaler(enabled=self.use_amp)
+        
+        # Gradient Clipping
+        grad_clip_config = train_config.get('gradient_clipping', {})
+        self.use_grad_clip = grad_clip_config.get('enabled', False)
+        self.grad_clip_max_norm = grad_clip_config.get('max_norm', 1.0)
+        
+        if self.use_amp:
+            self.logger.info(f"Mixed Precision (AMP): ENABLED")
+        else:
+            self.logger.info(f"Mixed Precision (AMP): DISABLED")
+        
+        if self.use_grad_clip:
+            self.logger.info(f"Gradient Clipping: ENABLED (max_norm={self.grad_clip_max_norm})")
+        else:
+            self.logger.info(f"Gradient Clipping: DISABLED")
+    
     def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
         """
         Entrena una época completa
@@ -246,34 +278,47 @@ class DCTGANTrainer:
             for _ in range(disc_updates_per_batch):
                 self.optimizer_D.zero_grad(set_to_none=True)  # Más eficiente
                 
-                # Forward pass del generator (sin gradientes para encoder/decoder)
-                with torch.no_grad():
-                    stego, _ = self.model(cover, secret, mode='full')
+                # Forward pass con AMP
+                with autocast(enabled=self.use_amp):
+                    # Forward pass del generator (sin gradientes para encoder/decoder)
+                    with torch.no_grad():
+                        stego, _ = self.model(cover, secret, mode='full')
+                    
+                    # Discriminator outputs
+                    real_validity = self.model.discriminator(cover)
+                    fake_validity = self.model.discriminator(stego.detach())
+                    
+                    # Discriminator loss (WGAN)
+                    loss_D, disc_metrics = self.hybrid_loss.discriminator_loss(
+                        real_validity, 
+                        fake_validity
+                    )
+                    
+                    # Gradient penalty (WGAN-GP)
+                    gp = self.gradient_penalty(
+                        self.model.discriminator,
+                        cover,
+                        stego.detach(),
+                        self.device
+                    )
+                    
+                    # Total discriminator loss
+                    loss_D_total = loss_D + gp
                 
-                # Discriminator outputs
-                real_validity = self.model.discriminator(cover)
-                fake_validity = self.model.discriminator(stego.detach())
+                # Backward con AMP
+                self.scaler.scale(loss_D_total).backward()
                 
-                # Discriminator loss (WGAN)
-                loss_D, disc_metrics = self.hybrid_loss.discriminator_loss(
-                    real_validity, 
-                    fake_validity
-                )
+                # Gradient clipping (opcional)
+                if self.use_grad_clip:
+                    self.scaler.unscale_(self.optimizer_D)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.discriminator.parameters(), 
+                        self.grad_clip_max_norm
+                    )
                 
-                # Gradient penalty (WGAN-GP)
-                gp = self.gradient_penalty(
-                    self.model.discriminator,
-                    cover,
-                    stego.detach(),
-                    self.device
-                )
-                
-                # Total discriminator loss
-                loss_D_total = loss_D + gp
-                
-                # Backward
-                loss_D_total.backward()
-                self.optimizer_D.step()
+                # Optimizer step con AMP
+                self.scaler.step(self.optimizer_D)
+                self.scaler.update()
                 
                 # Acumular para promedio
                 d_loss_accum += loss_D.item()
@@ -299,24 +344,39 @@ class DCTGANTrainer:
             for _ in range(gen_updates_per_batch):
                 self.optimizer_G.zero_grad(set_to_none=True)
                 
-                # Forward pass completo
-                stego, recovered_secret = self.model(cover, secret, mode='full')
+                # Forward pass con AMP
+                with autocast(enabled=self.use_amp):
+                    # Forward pass completo
+                    stego, recovered_secret = self.model(cover, secret, mode='full')
+                    
+                    # Discriminator output para stego
+                    fake_validity = self.model.discriminator(stego)
+                    
+                    # Generator loss (Ecuación 5)
+                    loss_G, gen_metrics = self.hybrid_loss.generator_loss(
+                        cover_image=cover,
+                        stego_image=stego,
+                        secret_original=secret,
+                        secret_recovered=recovered_secret,
+                        discriminator_output=fake_validity
+                    )
                 
-                # Discriminator output para stego
-                fake_validity = self.model.discriminator(stego)
+                # Backward con AMP
+                self.scaler.scale(loss_G).backward()
                 
-                # Generator loss (Ecuación 5)
-                loss_G, gen_metrics = self.hybrid_loss.generator_loss(
-                    cover_image=cover,
-                    stego_image=stego,
-                    secret_original=secret,
-                    secret_recovered=recovered_secret,
-                    discriminator_output=fake_validity
-                )
+                # Gradient clipping (opcional)
+                if self.use_grad_clip:
+                    self.scaler.unscale_(self.optimizer_G)
+                    generator_params = list(self.model.encoder.parameters()) + \
+                                      list(self.model.decoder.parameters())
+                    torch.nn.utils.clip_grad_norm_(
+                        generator_params, 
+                        self.grad_clip_max_norm
+                    )
                 
-                # Backward
-                loss_G.backward()
-                self.optimizer_G.step()
+                # Optimizer step con AMP
+                self.scaler.step(self.optimizer_G)
+                self.scaler.update()
                 
                 # Acumular para promedio
                 g_loss_accum += gen_metrics['loss_total']

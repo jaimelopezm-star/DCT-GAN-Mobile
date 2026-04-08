@@ -1,0 +1,141 @@
+# ✅ Config OPTIMIZADO: Velocidad + Fix discriminador
+# Cambios vs paper_exact_config_30ep.yaml:
+# 1. Batch_size 32→128 (4× más rápido, mejor uso GPU)
+# 2. Mixed precision (AMP) activado
+# 3. Discriminator: SGD → Adam (más estable)
+# 4. Discriminator LR: 0.001 → 0.005 (más agresivo)
+# 5. Gradient clipping agregado
+
+project:
+  name: "DCT-GAN-Fix-5D1G-Optimized"
+  description: "Test optimizado: velocidad + fix discriminador"
+  seed: 42
+
+# Dataset Configuration - OPTIMIZADO
+data:
+  dataset_name: "ImageNet2012"
+  train_size: 40000
+  val_size: 5000
+  test_size: 5000
+  image_size: 256
+  num_workers: 8          # Aumentado de 4 a 8 para RTX 4090
+  pin_memory: true
+  batch_size: 128         # ⚡ Aumentado de 32 a 128 (4× más rápido)
+
+# Model Architecture
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 16
+    input_channels: 6
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 16
+    output_channels: 3
+    activation: "relu"
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 8
+    kernel_size: 5
+    num_conv_layers: 5
+    activation: "leaky_relu"
+    leaky_slope: 0.2
+    use_srm: false
+
+# DCT Configuration
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# Loss Functions
+loss:
+  alpha: 0.3
+  beta: 15.0
+  gamma: 0.03
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# Training Configuration - OPTIMIZADO
+training:
+  num_epochs: 30
+  
+  # CRITICAL: 5D:1G ratio
+  update_strategy:
+    discriminator_updates_per_batch: 5
+    generator_updates_per_batch: 1
+  
+  # Gradient clipping (evita explosión/saturación)
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0         # Clip gradientes a norm=1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3
+      betas: [0.9, 0.999]
+      weight_decay: 0.005
+    
+    discriminator:
+      type: "adam"          # ⚡ CAMBIADO: SGD → Adam (más estable)
+      lr: 5.0e-3            # ⚡ AUMENTADO: 0.001 → 0.005 (más agresivo)
+      betas: [0.5, 0.999]   # Beta1=0.5 es común para D en GANs
+      weight_decay: 0.005
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step"
+  step_size: 30
+  gamma: 0.1
+
+# Hardware - OPTIMIZADO
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: true    # ⚡ ACTIVADO: AMP para velocidad
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early Stopping
+early_stopping:
+  enabled: false
+
+# 🎯 MEJORAS ESPERADAS:
+# Velocidad:
+#   - Batch 128 vs 32: 4× más rápido
+#   - AMP: 1.5-2× más rápido
+#   - Total: ~6-8× más rápido (1.5 min/epoch vs 13 min/epoch)
+#
+# Calidad:
+#   - Adam en D: Más estable que SGD
+#   - LR 0.005: Más agresivo, aprende más rápido
+#   - Gradient clipping: Evita saturación
+#   - Esperado: D(x) diverge de D(G(z)) en epochs 3-5
