@@ -1,0 +1,154 @@
+# 🎯 BALANCED SCALE 0.09: LÍMITE SUPERIOR (último test antes de cambio arquitectural)
+#
+# EXPERIMENTACIÓN SISTEMÁTICA - RESULTADOS CONFIRMADOS:
+# - scale=0.01: Visual 79 dB, Recovery 4.75 dB ❌
+# - scale=0.03: Visual 32 dB, Recovery 4.45 dB ❌
+# - scale=0.05: Visual 29 dB, Recovery ?? (pendiente evaluar)
+# - scale=0.07: Visual 26 dB, Recovery 4.96 dB ❌
+# - scale=0.09: Visual ??, Recovery ?? ← ESTE (límite superior - ventana de solo 1 dB con 0.1)
+# - scale=0.1:  Visual 23 dB, Recovery >20 dB ✅ (FUNCIONA)
+#
+# HIPÓTESIS CRÍTICA: 
+# Scale 0.09 es el ÚLTIMO punto antes de 0.1 que sabemos funciona.
+# Si falla → problema es ARQUITECTURAL (decoder débil)
+# Si funciona → ganamos 1 dB de PSNR (24 vs 23 dB)
+#
+# ESTRATEGIA: Confirmar límite superior del enfoque actual antes de cambios arquitecturales
+
+project:
+  name: "DCT-GAN-Scale-09"
+  description: "Testing residual_scale=0.09 (límite superior - 1 dB antes de 0.1 funcional)"
+  seed: 42
+
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 16
+
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    # *** LÍMITE SUPERIOR: 0.09 es el último punto antes de 0.1 (funcional) ***
+    # Solo 1 dB de diferencia con 0.1 → alta probabilidad de éxito
+    residual_scale: 0.09
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+loss:
+  # Weights balanceados (probados en todos los scales anteriores)
+  alpha: 5.0
+  beta: 5.0
+  gamma: 0.0
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+training:
+  num_epochs: 150
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 2.0e-4
+      betas: [0.9, 0.999]
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+scheduler:
+  type: "step_lr"
+  step_size: 50
+  gamma: 0.5
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false
+
+logging:
+  log_frequency: 10
+  save_frequency: 10
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+early_stopping:
+  enabled: true
+  patience: 50
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# EXPECTATIVAS CON residual_scale=0.09:
+# =============================================================================
+# Este es el LÍMITE SUPERIOR del enfoque basado en residual_scale.
+#
+# Ventana crítica:
+# - scale=0.07 (26 dB) → FALLA recovery (4.96 dB)
+# - scale=0.1  (23 dB) → FUNCIONA recovery (>20 dB)
+# - scale=0.09 está a MEDIO CAMINO → probabilidad media-alta de éxito
+#
+# Predicción:
+# - PSNR visual: ~23-24 dB (cercano a scale=0.1)
+# - Recovery: SI FUNCIONA, deberíamos ver >15-20 dB
+#
+# Importancia estratégica:
+# ✅ Si FUNCIONA → Tenemos límite superior optimizado (mejor que 0.1)
+# ❌ Si FALLA → Confirmamos que problema es ARQUITECTURAL (no solo scale)
+#                → Siguiente paso: reforzar decoder o revisar paper en detalle
+# =============================================================================
