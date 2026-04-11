@@ -1,0 +1,171 @@
+# 🔧 CONFIGURACIÓN CON ARQUITECTURA CORREGIDA
+# Paper: Malik et al., Scientific Reports 2025
+# DOI: 10.1038/s41598-025-01054-7
+# 
+# CORRECCIONES CRÍTICAS vs implementación anterior:
+# ================================================
+# 1. Encoder: Añadido downsampling/upsampling (256→64→256)
+# 2. Encoder: BatchNorm en cada capa (antes: sin BN)
+# 3. Encoder: Dropout=0.5 en residual blocks (antes: sin dropout)
+# 4. Decoder: BatchNorm en cada capa (antes: sin BN)
+# 5. Discriminador: BatchNorm + Spectral Norm (estabilidad WGAN)
+# 6. Discriminador: Sin Sigmoid final (raw logits para WGAN)
+
+project:
+  name: "DCT-GAN-Architecture-Fixed"
+  description: "Arquitectura corregida con BN+Dropout+Spectral Norm"
+  seed: 42
+
+# Dataset Configuration
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 32         # Paper exacto
+
+# ============================================================================
+# MODEL ARCHITECTURE - CORREGIDA
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  # ENCODER CORREGIDO
+  # - Downsampling: 256→128→64 (conv stride 2)
+  # - 9 Residual Blocks con BN+ReLU+Dropout a 64x64
+  # - Upsampling: 64→128→256 (conv transpose)
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9      # ✅ Paper exacto
+    base_channels: 64           # ✅ Paper estándar
+    input_channels: 6           # ✅ Cover(3) + Secret(3)
+    use_dropout: true           # ✅ Paper: dropout en residual
+    dropout_rate: 0.5           # ✅ Paper: 0.5
+  
+  # DECODER CORREGIDO
+  # - 6 capas conv con BN+ReLU
+  decoder:
+    type: "cnn"
+    num_layers: 6               # ✅ Paper exacto
+    base_channels: 64           # ✅ Paper estándar
+    output_channels: 3
+  
+  # DISCRIMINADOR CORREGIDO
+  # - BatchNorm para estabilidad
+  # - Spectral Norm para WGAN
+  # - Sin Sigmoid (raw logits)
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 64           # ✅ Paper estándar
+    kernel_size: 5              # ✅ Paper exacto
+    num_conv_layers: 5          # ✅ Paper exacto
+    use_srm: false              # Deshabilitado
+    use_spectral_norm: true     # ✅ Estabilidad WGAN
+
+# DCT Configuration
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# Loss Functions - Paper Exact (Ecuación 5)
+loss:
+  alpha: 0.3                    # ✅ Paper exacto
+  beta: 15.0                    # ✅ Paper exacto
+  gamma: 0.03                   # ✅ Paper exacto
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# Training Configuration
+training:
+  num_epochs: 100
+  
+  update_strategy:
+    discriminator_updates_per_batch: 5  # 5D:1G ratio
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3                # Más conservador para estabilidad
+      betas: [0.9, 0.999]
+      weight_decay: 0.01
+    
+    discriminator:
+      type: "sgd"               # ✅ Paper: SGD
+      lr: 1.0e-3                # Más conservador para estabilidad
+      momentum: 0.9
+      weight_decay: 0.01
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step_lr"
+  step_size: 30
+  gamma: 0.5                    # Reduce LR 50% cada 30 epochs
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false        # Deshabilitado para estabilidad
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 50
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# RESUMEN DE CAMBIOS DE ARQUITECTURA
+# =============================================================================
+# 
+# ENCODER:
+# - ANTES: Conv input → 9 ResBlocks (sin BN) → Conv output
+# - AHORA: Conv↓ → Conv↓ → 9 ResBlocks (BN+Dropout) → ConvT↑ → ConvT↑ → Conv out
+# - Resolución: 256 → 128 → 64 → 128 → 256
+# 
+# DECODER:
+# - ANTES: 6 Conv (sin BN)
+# - AHORA: 6 Conv (con BN+ReLU)
+# 
+# DISCRIMINADOR:
+# - ANTES: 5 Conv (sin BN, Sigmoid al final)
+# - AHORA: 5 Conv (con BN + Spectral Norm, sin Sigmoid)
+# 
+# IMPACTO ESPERADO:
+# - Mejor gradiente flow → PSNR más alto
+# - Discriminador más estable → menos colapso
+# - Dropout → mejor generalización
+# =============================================================================

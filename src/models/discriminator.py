@@ -7,6 +7,10 @@ Implementa:
 
 El discriminador actúa como estegoanalizador para hacer
 el sistema más robusto contra detección.
+
+Paper: "A Hybrid Steganography Framework Using DCT and GAN"
+       Malik et al., Scientific Reports 2025
+       DOI: 10.1038/s41598-025-01054-7
 """
 
 import torch
@@ -75,30 +79,32 @@ class SRMFilter(nn.Module):
 
 class XuNetDiscriminator(nn.Module):
     """
-    Discriminador basado en XuNet (modificado para 3 canales)
+    Discriminador basado en XuNet Modificado (Paper Exact)
     
     Arquitectura del paper:
-    - Primera capa: kernel KV (5×5) transpuesto adaptado a 3 canales
-    - 5 capas convolucionales con activación Leaky ReLU
+    - Primera capa: kernel 5×5 adaptado a 3 canales RGB
+    - 5 capas convolucionales con BatchNorm + Leaky ReLU
+    - Spectral Normalization para estabilidad WGAN
     - Global Average Pooling
-    - Fully Connected + Sigmoid para clasificación binaria
+    - Fully Connected para clasificación
     
-    Detecta si una imagen es cover o stego, forzando al generador
-    a crear imágenes más imperceptibles.
+    Para WGAN: NO usar Sigmoid al final (raw logits)
     
     Args:
         input_channels: Canales de entrada (default: 3 para RGB)
         base_channels: Canales base (default: 64)
         num_conv_layers: Número de capas conv (default: 5)
-        use_srm: Usar filtro SRM inicial (default: True)
+        use_srm: Usar filtro SRM inicial (default: False)
+        use_spectral_norm: Usar normalización espectral (default: True)
     """
     
     def __init__(
         self,
         input_channels=3,
-        base_channels=8,  # Balanced for ~10K params
+        base_channels=64,  # Paper uses 64 channels
         num_conv_layers=5,
-        use_srm=False  # Deshabilitado por bug PyTorch 2.10
+        use_srm=False,
+        use_spectral_norm=True  # Para estabilidad WGAN
     ):
         super(XuNetDiscriminator, self).__init__()
         
@@ -108,19 +114,31 @@ class XuNetDiscriminator(nn.Module):
         if use_srm:
             self.srm_filter = SRMFilter()
         
-        # Primera capa especial (sin BN)
-        self.conv1 = nn.Conv2d(input_channels, base_channels, kernel_size=5, stride=1, padding=2, bias=False)
+        # Función para aplicar spectral norm si está habilitada
+        def maybe_spectral_norm(module):
+            if use_spectral_norm:
+                return nn.utils.spectral_norm(module)
+            return module
+        
+        # Primera capa especial: kernel 5×5 (Paper: KV transpuesto)
+        self.conv1 = maybe_spectral_norm(
+            nn.Conv2d(input_channels, base_channels, kernel_size=5, stride=1, padding=2, bias=False)
+        )
+        self.bn1 = nn.BatchNorm2d(base_channels)
         self.leaky_relu = nn.LeakyReLU(0.2, inplace=True)
         
-        # Capas convolucionales intermedias (sin BN)
+        # Capas convolucionales intermedias con BN
         self.conv_layers = nn.ModuleList()
         in_ch = base_channels
         
         for i in range(num_conv_layers - 1):
-            out_ch = min(base_channels * (2 ** (i + 1)), 64)  # Max 64 canales
+            out_ch = min(base_channels * (2 ** (i + 1)), 512)  # Max 512 canales
             
             layer = nn.Sequential(
-                nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=False),
+                maybe_spectral_norm(
+                    nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=False)
+                ),
+                nn.BatchNorm2d(out_ch),
                 nn.LeakyReLU(0.2, inplace=True)
             )
             self.conv_layers.append(layer)
@@ -129,11 +147,8 @@ class XuNetDiscriminator(nn.Module):
         # Global Average Pooling
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         
-        # Clasificador simplificado
-        self.fc = nn.Sequential(
-            nn.Linear(in_ch, 1),
-            nn.Sigmoid()
-        )
+        # Clasificador - NO Sigmoid para WGAN (output raw logits)
+        self.fc = nn.Linear(in_ch, 1)
         
     def forward(self, x):
         """
@@ -143,15 +158,17 @@ class XuNetDiscriminator(nn.Module):
             x: Imagen (B, 3, 256, 256)
             
         Returns:
-            prob: Probabilidad de que sea stego (B, 1) en [0, 1]
-                  0 = cover, 1 = stego
+            logits: Raw logits (B, 1) - sin Sigmoid para WGAN
+                    Valores positivos = más probable cover
+                    Valores negativos = más probable stego
         """
         # Preprocesamiento opcional con SRM
         if self.use_srm:
             x = self.srm_filter(x)
         
-        # Primera capa
+        # Primera capa con BN
         x = self.conv1(x)
+        x = self.bn1(x)
         x = self.leaky_relu(x)
         
         # Capas convolucionales
@@ -162,10 +179,10 @@ class XuNetDiscriminator(nn.Module):
         x = self.global_pool(x)
         x = x.view(x.size(0), -1)
         
-        # Clasificación
-        prob = self.fc(x)
+        # Clasificación (raw logits para WGAN)
+        logits = self.fc(x)
         
-        return prob
+        return logits
     
     def get_num_params(self):
         """Retorna el número total de parámetros"""
@@ -362,9 +379,10 @@ def create_discriminator(config):
     if disc_type == 'xunet_modified':
         return XuNetDiscriminator(
             input_channels=config.get('input_channels', 3),
-            base_channels=config.get('base_channels', 4),  # Optimizado a 4 para ~26K params
+            base_channels=config.get('base_channels', 64),  # Paper: 64 channels
             num_conv_layers=config.get('num_conv_layers', 5),
-            use_srm=config.get('use_srm', False)  # Deshabilitado por defecto
+            use_srm=config.get('use_srm', False),
+            use_spectral_norm=config.get('use_spectral_norm', True)  # Estabilidad WGAN
         )
     elif disc_type == 'efficient_xunet':
         return EfficientXuNet(

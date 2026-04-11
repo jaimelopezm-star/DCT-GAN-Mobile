@@ -4,6 +4,10 @@ Decoder Architectures para DCT-GAN Steganography
 Implementa:
 1. CNN Decoder (Paper Original - 6 capas convolucionales)
 2. Lightweight Decoder (Propuesta 1 - optimizado para móviles)
+
+Paper: "A Hybrid Steganography Framework Using DCT and GAN"
+       Malik et al., Scientific Reports 2025
+       DOI: 10.1038/s41598-025-01054-7
 """
 
 import torch
@@ -13,24 +17,24 @@ import torch.nn.functional as F
 
 class CNNDecoder(nn.Module):
     """
-    Decoder CNN simplificado para ~15K parámetros
+    Decoder CNN con BatchNorm (Paper Exact)
     
-    Arquitectura del paper (Fig. 4, simplificada sin BN):
+    Arquitectura del paper (Fig. 4):
     - Input: Stego Image (B, 3, 256, 256)
     - 6 capas convolucionales (3×3, stride 1, padding 1)
-    - ReLU después de cada capa (excepto la última)
+    - BatchNorm + ReLU después de cada capa intermedia
     - Output: Recovered Secret Image (B, 3, 256, 256)
     - Función de activación final: Sigmoid (rango [0, 1])
     
     Args:
-        base_channels: Canales base (default: 16, reducido de 64)
+        base_channels: Canales base (default: 64)
         num_layers: Número de capas convolucionales (default: 6)
         output_channels: Canales de salida (default: 3 para RGB)
     """
     
     def __init__(
         self,
-        base_channels=16,  # Balanced for ~12K params
+        base_channels=64,  # Paper uses 64 channels
         num_layers=6,
         output_channels=3
     ):
@@ -41,20 +45,22 @@ class CNNDecoder(nn.Module):
         
         layers = []
         
-        # Primera capa: 3 -> base_channels (sin BN)
+        # Primera capa: 3 -> base_channels con BN+ReLU
         layers.extend([
             nn.Conv2d(3, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(base_channels),
             nn.ReLU(inplace=True)
         ])
         
-        # Capas intermedias: base_channels -> base_channels (sin BN)
+        # Capas intermedias: base_channels -> base_channels con BN+ReLU
         for _ in range(num_layers - 2):
             layers.extend([
                 nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
+                nn.BatchNorm2d(base_channels),
                 nn.ReLU(inplace=True)
             ])
         
-        # Última capa: base_channels -> output_channels
+        # Última capa: base_channels -> output_channels + Sigmoid
         layers.extend([
             nn.Conv2d(base_channels, output_channels, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid()  # Output en rango [0, 1]
@@ -311,7 +317,7 @@ def create_decoder(config):
     
     if decoder_type == 'cnn':
         return CNNDecoder(
-            base_channels=config.get('base_channels', 10),  # Optimizado a 10 para ~4K params
+            base_channels=config.get('base_channels', 64),  # Paper: 64 channels
             num_layers=config.get('num_layers', 6),
             output_channels=config.get('output_channels', 3)
         )
