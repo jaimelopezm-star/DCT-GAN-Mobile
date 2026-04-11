@@ -10,15 +10,38 @@ Métricas a evaluar:
 import torch
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from src.models.gan import DCTGAN
-from src.data.dataset import StegoDataset
-from src.training.metrics import calculate_ssim, calculate_rmse
-from src.training.losses import calculate_psnr
-import yaml
 from pathlib import Path
+
+# Agregar src al path
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
+
+from models.gan import DCTGAN
+from training.metrics import calculate_ssim, calculate_rmse
+from training.losses import calculate_psnr
+import yaml
 import numpy as np
+from torch.utils.data import Dataset
+
+
+class SyntheticDataset(Dataset):
+    """Dataset sintético para evaluación rápida"""
+    
+    def __init__(self, image_size: int = 256, num_samples: int = 50):
+        self.image_size = image_size
+        self.num_samples = num_samples
+    
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, idx):
+        """Genera pares sintéticos aleatorios"""
+        cover = torch.rand(3, self.image_size, self.image_size) * 2 - 1  # Rango [-1, 1]
+        secret = torch.rand(3, self.image_size, self.image_size) * 2 - 1
+        
+        return {
+            'cover': cover,
+            'secret': secret
+        }
 
 
 def evaluate_secret_recovery(checkpoint_path: str, config_path: str, num_samples: int = 50):
@@ -52,12 +75,13 @@ def evaluate_secret_recovery(checkpoint_path: str, config_path: str, num_samples
     print(f"Checkpoint cargado: {checkpoint_path}")
     
     # Crear dataset de prueba
-    dataset = StegoDataset(
-        dataset_type='synthetic',
-        split='test',
-        size=num_samples,
-        image_size=config['data'].get('image_size', 256)
+    image_size = config['data'].get('image_size', 256)
+    dataset = SyntheticDataset(
+        image_size=image_size,
+        num_samples=num_samples
     )
+    
+    print(f"Dataset sintético creado: {num_samples} muestras")
     
     # Métricas
     psnr_cover_stego = []  # PSNR entre cover y stego (calidad visual)
