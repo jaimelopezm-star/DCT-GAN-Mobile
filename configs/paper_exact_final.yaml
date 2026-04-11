@@ -1,0 +1,151 @@
+# 🎯 Configuración EXACTA del Paper - Último Intento
+# Paper: Malik et al., Scientific Reports 2025
+# DOI: 10.1038/s41598-025-01054-7
+# 
+# CAMBIOS vs configuraciones anteriores:
+# 1. batch_size: 32 (paper) vs 256 (anterior)
+# 2. discriminator optimizer: SGD (paper) vs Adam (anterior)
+# 3. LR discriminator: 0.01 (paper) vs 0.005 (anterior)
+# 4. weight_decay: 0.01 (paper) vs 0.005 (anterior)
+# 5. LR inicial gen: 0.005 (paper) vs 0.001 (anterior)
+# 6. base_channels: 64 (estimado del paper) vs 16 (anterior)
+
+project:
+  name: "DCT-GAN-Paper-Exact-Final"
+  description: "Configuración EXACTA del paper - Último intento"
+  seed: 42
+
+# Dataset Configuration - EXACTO del paper
+data:
+  dataset_name: "DIV2K"  # Lo más cercano a ImageNet que tenemos
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 32         # ✅ PAPER EXACTO (Tabla 3)
+
+# Model Architecture - PAPER EXACT con base_channels aumentados
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9      # ✅ Paper exacto
+    base_channels: 64           # ⬆️ AUMENTADO (paper no especifica, pero 64 es estándar)
+    input_channels: 6           # ✅ Cover(3) + Secret(3)
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6               # ✅ Paper exacto
+    base_channels: 64           # ⬆️ AUMENTADO
+    output_channels: 3
+    activation: "relu"          # ✅ Paper exacto (BN + ReLU)
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32           # ⬆️ AUMENTADO para discriminador más fuerte
+    kernel_size: 5              # ✅ Paper exacto
+    num_conv_layers: 5          # ✅ Paper exacto
+    activation: "leaky_relu"
+    leaky_slope: 0.2
+    use_srm: false
+
+# DCT Configuration - PAPER EXACT
+dct:
+  block_size: 8                 # ✅ Paper exacto (8×8)
+  use_zig_zag: true             # ✅ Paper exacto (Figura 3)
+  frequency_selection: "chaotic_map"  # ✅ Paper exacto
+  embed_in_ac: true             # ✅ Solo coeficientes AC
+
+# Loss Functions - PAPER EXACT (Ecuación 5)
+loss:
+  alpha: 0.3                    # ✅ Paper exacto
+  beta: 15.0                    # ✅ Paper exacto
+  gamma: 0.03                   # ✅ Paper exacto
+  
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"                # ✅ Paper exacto
+    clip_value: 0.01
+
+# Training Configuration - PAPER EXACT
+training:
+  num_epochs: 100               # ✅ Paper exacto
+  
+  update_strategy:
+    discriminator_updates_per_batch: 5  # ✅ Paper: "5× discriminator"
+    generator_updates_per_batch: 1      # ✅ Paper: "1× generator"
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:                   # Encoder-Decoder
+      type: "adam"              # ✅ Paper exacto (Adam)
+      lr: 5.0e-3                # ✅ PAPER: LR inicial 0.005
+      betas: [0.9, 0.999]
+      weight_decay: 0.01        # ✅ PAPER: weight_decay 1×10^-2
+    
+    discriminator:
+      type: "sgd"               # ✅ PAPER EXACTO: SGD (no Adam!)
+      lr: 1.0e-2                # ✅ PAPER: 1×10^-2
+      momentum: 0.9
+      weight_decay: 0.01        # ✅ PAPER: weight_decay 1×10^-2
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step_lr"
+  step_size: 30
+  gamma: 0.1                    # Reduce LR a 0.001 después de epoch 30
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false        # ❌ Deshabilitado (paper no menciona)
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 50
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# RESUMEN DE CAMBIOS CRÍTICOS vs experimentos anteriores:
+# =============================================================================
+# 
+# 1. batch_size: 32 ← Paper dice 32, nosotros usábamos 256
+# 2. discriminator.optimizer: SGD ← Paper usa SGD, nosotros usábamos Adam
+# 3. discriminator.lr: 0.01 ← Paper usa 1×10^-2
+# 4. generator.lr: 0.005 ← Paper usa 0.005 inicialmente
+# 5. weight_decay: 0.01 ← Paper usa 1×10^-2
+# 6. base_channels: 64 ← Aumentado de 16
+# 7. mixed_precision: false ← Deshabilitado para coincider con paper
+#
+# Tiempo estimado: ~4-6 horas en RTX 4090
+# Costo estimado: ~$2-3
+# =============================================================================
