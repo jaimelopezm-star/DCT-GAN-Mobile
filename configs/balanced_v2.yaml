@@ -1,0 +1,143 @@
+# 🎯 BALANCED V2: Fixing Training Collapse
+#
+# PROBLEMA DETECTADO en balanced.yaml:
+# - Epoch 1: PSNR 36.36 dB (mejor modelo)
+# - Epoch 2-51: PSNR cayó a 32 dB (estancamiento)
+# - Causa: learning rate alto + beta >> alpha
+#
+# SOLUCIÓN V2:
+# 1. Learning rate reducido 5e-4 → 2e-4 (más estable)
+# 2. Loss weights balanceados: alpha=5.0 (era 3.0), beta=5.0 (era 8.0)
+# 3. Scheduler más suave: step cada 50 epochs (era 40)
+# 4. Early stopping patience aumentado a 50
+
+project:
+  name: "DCT-GAN-Balanced-V2"
+  description: "Training estable con loss balanceado y lr bajo"
+  seed: 42
+
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 16
+
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    # Mantener scale=0.03 (demostró 36 dB en época 1)
+    residual_scale: 0.03
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+loss:
+  # *** CAMBIO CRÍTICO: Balancear calidad visual y recovery ***
+  alpha: 5.0   # ↑ de 3.0 (priorizar calidad visual)
+  beta: 5.0    # ↓ de 8.0 (equilibrar con recovery)
+  gamma: 0.0   # Sin discriminador (enfoque en reconstrucción)
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+training:
+  num_epochs: 150
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 2.0e-4   # *** REDUCIDO de 5e-4 → 2e-4 (más estable) ***
+      betas: [0.9, 0.999]
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+scheduler:
+  type: "step_lr"
+  step_size: 50   # *** AUMENTADO de 40 → 50 (decay más suave) ***
+  gamma: 0.5
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false
+
+logging:
+  log_frequency: 10
+  save_frequency: 10
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+early_stopping:
+  enabled: true
+  patience: 50   # *** AUMENTADO de 30 → 50 (más tiempo para mejorar) ***
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# EXPECTATIVAS CON LOS CAMBIOS:
+# =============================================================================
+# MEJORA ESPERADA:
+# - Epoch 1 dio 36 dB, pero el entrenamiento empeoró por:
+#   1. Learning rate alto causó oscilaciones
+#   2. beta=8.0 vs alpha=3.0 sacrificó PSNR por recovery
+#
+# CON balanced_v2.yaml:
+# - Training más estable (lr bajo)
+# - PSNR debería alcanzar 40-45 dB y mantenerse
+# - Recovery exitosa con beta=alpha=5.0
+# =============================================================================
