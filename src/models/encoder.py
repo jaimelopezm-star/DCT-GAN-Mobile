@@ -57,17 +57,19 @@ class ResidualBlock(nn.Module):
 
 class ResNetEncoder(nn.Module):
     """
-    Encoder basado en ResNet con 9 bloques residuales (Optimizado para Steganografía)
+    Encoder basado en ResNet con ARQUITECTURA RESIDUAL para Steganografía
     
-    IMPORTANTE: Para steganografía necesitamos preservar TODOS los detalles.
-    El downsampling pierde información crítica. Usamos resolución completa.
+    CLAVE: stego = cover + residual (pequeña modificación)
+    
+    El encoder NO genera el stego completo. Solo aprende el RESIDUO
+    (la modificación pequeña) que se suma al cover original.
+    Esto garantiza que stego ≈ cover (alto PSNR).
     
     Arquitectura:
     - Input: 6 channels (Cover 3 + Secret 3) × 256×256
-    - Conv inicial con BatchNorm
-    - 9 bloques residuales con BatchNorm + Dropout (full resolution)
-    - Conv de salida + Tanh
-    - Output: 3 channels (Stego Image) × 256×256
+    - Procesa con bloques residuales
+    - Output: Residuo pequeño (3 channels)
+    - Final: stego = cover + residual_scale * residuo
     
     Args:
         input_channels: Número de canales de entrada (default: 6)
@@ -75,30 +77,33 @@ class ResNetEncoder(nn.Module):
         num_residual_blocks: Número de bloques residuales (default: 9)
         use_dropout: Usar dropout en bloques residuales (default: True)
         dropout_rate: Tasa de dropout (default: 0.3)
+        residual_scale: Factor de escala para el residuo (default: 0.1)
     """
     
     def __init__(
         self,
         input_channels=6,
-        base_channels=64,  # Paper uses 64 channels
+        base_channels=64,
         num_residual_blocks=9,
         use_dropout=True,
-        dropout_rate=0.3  # Reducido para mejor convergencia
+        dropout_rate=0.3,
+        residual_scale=0.1  # NUEVO: escala pequeña para residuo
     ):
         super(ResNetEncoder, self).__init__()
         
         self.input_channels = input_channels
         self.base_channels = base_channels
         self.num_residual_blocks = num_residual_blocks
+        self.residual_scale = residual_scale  # Factor de escala
         
-        # ============ INPUT LAYER (sin downsampling para preservar detalles) ============
+        # ============ INPUT LAYER ============
         self.conv_input = nn.Sequential(
             nn.Conv2d(input_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(base_channels),
             nn.ReLU(inplace=True)
         )
         
-        # ============ RESIDUAL BLOCKS (9 blocks at full resolution) ============
+        # ============ RESIDUAL BLOCKS ============
         residual_blocks = []
         for _ in range(num_residual_blocks):
             residual_blocks.append(
@@ -107,43 +112,47 @@ class ResNetEncoder(nn.Module):
         self.residual_layers = nn.Sequential(*residual_blocks)
         
         # ============ OUTPUT LAYER ============
-        # Conv intermedia para refinar features
         self.conv_refine = nn.Sequential(
             nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(base_channels),
             nn.ReLU(inplace=True)
         )
         
-        # Conv final para generar stego image
+        # Output genera el RESIDUO (no el stego completo)
         self.conv_output = nn.Conv2d(base_channels, 3, kernel_size=3, padding=1, bias=True)
-        self.tanh = nn.Tanh()  # Output en rango [-1, 1]
+        self.tanh = nn.Tanh()
         
     def forward(self, cover, secret):
         """
-        Forward pass del encoder
+        Forward pass RESIDUAL del encoder
+        
+        stego = cover + scale * residual
         
         Args:
-            cover: Imagen de cobertura (B, 3, 256, 256)
-            secret: Imagen secreta (B, 3, 256, 256)
+            cover: Imagen de cobertura (B, 3, 256, 256) en rango [-1, 1]
+            secret: Imagen secreta (B, 3, 256, 256) en rango [-1, 1]
             
         Returns:
-            stego: Imagen esteganográfica (B, 3, 256, 256)
+            stego: Imagen esteganográfica (B, 3, 256, 256) en rango [-1, 1]
         """
         # Concatenar cover y secret (B, 6, 256, 256)
         x = torch.cat([cover, secret], dim=1)
         
-        # Input conv (sin cambio de resolución)
+        # Procesar
         x = self.conv_input(x)       # (B, 64, 256, 256)
-        
-        # Residual blocks (full resolution)
         x = self.residual_layers(x)  # (B, 64, 256, 256)
-        
-        # Refinamiento
         x = self.conv_refine(x)      # (B, 64, 256, 256)
         
-        # Output
-        x = self.conv_output(x)      # (B, 3, 256, 256)
-        stego = self.tanh(x)
+        # Generar RESIDUO (pequeña modificación)
+        residual = self.conv_output(x)  # (B, 3, 256, 256)
+        residual = self.tanh(residual)  # rango [-1, 1]
+        
+        # *** CLAVE: stego = cover + pequeña_modificación ***
+        # El residual se escala para ser pequeño
+        stego = cover + self.residual_scale * residual
+        
+        # Clamp para mantener en rango válido [-1, 1]
+        stego = torch.clamp(stego, -1.0, 1.0)
         
         return stego
     
@@ -367,7 +376,8 @@ def create_encoder(config):
             base_channels=config.get('base_channels', 64),  # Paper: 64 channels
             num_residual_blocks=config.get('num_residual_blocks', 9),
             use_dropout=config.get('use_dropout', True),
-            dropout_rate=config.get('dropout_rate', 0.5)
+            dropout_rate=config.get('dropout_rate', 0.5),
+            residual_scale=config.get('residual_scale', 0.1)  # Escala del residuo
         )
     elif encoder_type in ['mobilenetv3', 'mobilenetv3_small']:
         return MobileNetV3Encoder(

@@ -1,0 +1,169 @@
+# 🎯 CONFIGURACIÓN CON ARQUITECTURA RESIDUAL
+#
+# CAMBIO CRÍTICO: stego = cover + scale * residual
+#
+# El encoder NO genera el stego completo. Solo aprende el RESIDUO
+# (la modificación pequeña) que se suma al cover original.
+# Esto GARANTIZA que stego ≈ cover (alto PSNR desde el inicio).
+#
+# Con scale=0.1, la máxima diferencia pixel es 0.1 (rango [-1,1])
+# Esto da un PSNR mínimo de ~20 dB vs el cover original.
+
+project:
+  name: "DCT-GAN-Residual"
+  description: "Arquitectura residual: stego = cover + small_modification"
+  seed: 42
+
+# Dataset
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 16
+
+# ============================================================================
+# MODELO CON ARQUITECTURA RESIDUAL
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    # *** NUEVO: factor de escala del residuo ***
+    # stego = cover + residual_scale * network_output
+    # Más bajo = stego más similar a cover = PSNR más alto
+    # Más alto = más capacidad para esconder = PSNR más bajo
+    residual_scale: 0.1
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+# DCT (no usado aún pero requerido)
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# ============================================================================
+# LOSS: Solo reconstrucción (gamma=0)
+# ============================================================================
+loss:
+  # Alto peso a MSE (calidad visual del stego vs cover)
+  alpha: 2.0
+  
+  # Peso a recuperación del secreto
+  beta: 10.0
+  
+  # SIN ADVERSARIAL por ahora (activar en fase 2)
+  gamma: 0.0
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# ============================================================================
+# TRAINING
+# ============================================================================
+training:
+  num_epochs: 100
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0  # Sin discriminador
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3      # LR moderado
+      betas: [0.9, 0.999]
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+scheduler:
+  type: "step_lr"
+  step_size: 30
+  gamma: 0.5
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false
+
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+early_stopping:
+  enabled: true
+  patience: 20
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# EXPLICACIÓN DE LA ARQUITECTURA RESIDUAL:
+# =============================================================================
+# ANTES (problema):
+#   stego = encoder(cover, secret)
+#   → El encoder tenía que generar una imagen COMPLETA
+#   → Muy difícil hacer stego ≈ cover
+#   → PSNR bajo (~14 dB)
+#
+# AHORA (solución):
+#   residual = encoder(cover, secret)  # rango [-1, 1]
+#   stego = cover + 0.1 * residual
+#   → El encoder solo aprende la DIFERENCIA pequeña
+#   → stego SIEMPRE es similar a cover
+#   → PSNR alto garantizado (>30 dB esperado)
+#
+# MATEMÁTICA:
+#   - residual_scale = 0.1
+#   - Máxima diferencia por pixel = 0.1 (rango [-1, 1])
+#   - MSE máximo = 0.1² = 0.01
+#   - PSNR mínimo = 10*log10(1/0.01) ≈ 20 dB
+#   - Con entrenamiento, MSE << 0.01 → PSNR >> 30 dB
+# =============================================================================
