@@ -12,7 +12,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from src.models.dctgan import DCTGAN
+from src.models.gan import DCTGAN
 from src.data.dataset import StegoDataset
 from src.training.metrics import calculate_ssim, calculate_rmse
 from src.training.losses import calculate_psnr
