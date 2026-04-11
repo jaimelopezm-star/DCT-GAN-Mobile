@@ -111,13 +111,13 @@ def evaluate_secret_recovery(checkpoint_path: str, config_path: str, num_samples
             
             # Calcular métricas cover vs stego
             psnr_cs = calculate_psnr(cover, stego).item()
-            ssim_cs = calculate_ssim(cover, stego).item()
+            ssim_cs = calculate_ssim(cover, stego)  # Ya retorna float
             psnr_cover_stego.append(psnr_cs)
             ssim_cover_stego.append(ssim_cs)
             
             # Calcular métricas secret original vs recuperado
             psnr_sr = calculate_psnr(secret, recovered_secret).item()
-            ssim_sr = calculate_ssim(secret, recovered_secret).item()
+            ssim_sr = calculate_ssim(secret, recovered_secret)  # Ya retorna float
             psnr_secret_recovered.append(psnr_sr)
             ssim_secret_recovered.append(ssim_sr)
             
