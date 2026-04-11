@@ -60,7 +60,16 @@ def evaluate_secret_recovery(checkpoint_path: str, config_path: str, num_samples
     print(f"Device: {device}")
     
     # Crear modelo
-    model = DCTGAN(config['model'])
+    model_config = config['model']
+    encoder_config = model_config.get('encoder', {})
+    decoder_config = model_config.get('decoder', {})
+    discriminator_config = model_config.get('discriminator', {})
+    
+    model = DCTGAN(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        discriminator_config=discriminator_config
+    )
     
     # Cargar checkpoint
     checkpoint = torch.load(checkpoint_path, map_location=device)
