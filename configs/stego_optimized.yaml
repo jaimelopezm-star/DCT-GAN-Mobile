@@ -1,0 +1,149 @@
+# 🔧 CONFIGURACIÓN OPTIMIZADA PARA STEGANOGRAFÍA
+# Arquitectura sin downsampling + BatchNorm + Dropout moderado
+# 
+# CORRECCIÓN CRÍTICA:
+# El downsampling PIERDE información esencial para steganografía.
+# Necesitamos preservar TODOS los detalles a resolución completa.
+
+project:
+  name: "DCT-GAN-Stego-Optimized"
+  description: "Arquitectura optimizada: full resolution + BatchNorm"
+  seed: 42
+
+# Dataset Configuration
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 16         # Reducido para mejor gradiente
+
+# ============================================================================
+# MODEL ARCHITECTURE - OPTIMIZADA PARA STEGANOGRAFÍA
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  # ENCODER: Full resolution con BatchNorm
+  # NO downsampling - preservamos todos los detalles
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.3           # Reducido de 0.5 para mejor convergencia
+  
+  # DECODER: 6 capas con BatchNorm
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  # DISCRIMINADOR: Con BatchNorm + Spectral Norm
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32           # Reducido para balance
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+# DCT Configuration
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# Loss Functions
+loss:
+  alpha: 1.0                    # ⬆️ AUMENTADO: más peso a MSE (calidad visual)
+  beta: 10.0                    # Reducido levemente
+  gamma: 0.01                   # ⬇️ REDUCIDO: menos peso adversarial
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# Training Configuration - OPTIMIZADA
+training:
+  num_epochs: 100
+  
+  update_strategy:
+    discriminator_updates_per_batch: 1  # ⬇️ Reducido: 1:1 ratio
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 2.0e-4                # LR estándar para GANs
+      betas: [0.5, 0.999]       # Beta1=0.5 típico para GANs
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"              # Adam también para D (más estable)
+      lr: 2.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step_lr"
+  step_size: 50
+  gamma: 0.5
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 30
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# CAMBIOS CLAVE vs versión anterior:
+# =============================================================================
+# 1. SIN DOWNSAMPLING - preserva detalles para steganografía
+# 2. Dropout 0.3 (era 0.5) - mejor convergencia
+# 3. batch_size 16 (era 32) - gradientes más estables
+# 4. alpha=1.0 (era 0.3) - más peso a calidad visual
+# 5. gamma=0.01 (era 0.03) - menos presión adversarial
+# 6. Adam para ambos optimizadores - más estable
+# 7. LR=2e-4 - estándar para GANs
+# 8. Ratio 1:1 (era 5:1) - entrenamiento balanceado
+# =============================================================================

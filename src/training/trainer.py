@@ -155,18 +155,30 @@ class DCTGANTrainer:
             weight_decay=gen_wd
         )
         
-        # Discriminator optimizer
+        # Discriminator optimizer - puede ser Adam o SGD
         disc_config = opt_config.get('discriminator', {})
+        disc_type = disc_config.get('type', 'sgd').lower()
         disc_lr = disc_config.get('lr', 1e-3)
-        disc_momentum = disc_config.get('momentum', 0.9)
         disc_wd = disc_config.get('weight_decay', 0.005)
         
-        self.optimizer_D = optim.SGD(
-            self.model.discriminator.parameters(),
-            lr=disc_lr,
-            momentum=disc_momentum,
-            weight_decay=disc_wd
-        )
+        if disc_type == 'adam':
+            disc_betas = tuple(disc_config.get('betas', [0.5, 0.999]))
+            self.optimizer_D = optim.Adam(
+                self.model.discriminator.parameters(),
+                lr=disc_lr,
+                betas=disc_betas,
+                weight_decay=disc_wd
+            )
+            self.logger.info(f"Discriminator optimizer: Adam lr={disc_lr}")
+        else:  # SGD por defecto
+            disc_momentum = disc_config.get('momentum', 0.9)
+            self.optimizer_D = optim.SGD(
+                self.model.discriminator.parameters(),
+                lr=disc_lr,
+                momentum=disc_momentum,
+                weight_decay=disc_wd
+            )
+            self.logger.info(f"Discriminator optimizer: SGD lr={disc_lr}")
         
         # Learning rate schedulers
         scheduler_config = train_config.get('lr_scheduler', {})
@@ -185,7 +197,6 @@ class DCTGANTrainer:
         )
         
         self.logger.info(f"Generator optimizer: Adam lr={gen_lr}")
-        self.logger.info(f"Discriminator optimizer: SGD lr={disc_lr}")
         self.logger.info(f"Scheduler: StepLR step_size={step_size}, gamma={gamma}")
     
     def _setup_training_optimizations(self):

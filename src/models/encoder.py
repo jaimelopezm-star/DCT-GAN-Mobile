@@ -57,16 +57,16 @@ class ResidualBlock(nn.Module):
 
 class ResNetEncoder(nn.Module):
     """
-    Encoder basado en ResNet con 9 bloques residuales (Paper Exact)
+    Encoder basado en ResNet con 9 bloques residuales (Optimizado para Steganografía)
     
-    Arquitectura del paper (Tabla 2, Fig. 5):
+    IMPORTANTE: Para steganografía necesitamos preservar TODOS los detalles.
+    El downsampling pierde información crítica. Usamos resolución completa.
+    
+    Arquitectura:
     - Input: 6 channels (Cover 3 + Secret 3) × 256×256
-    - Conv 3×3 stride 2 (downsampling 1): 256→128
-    - Conv 3×3 stride 2 (downsampling 2): 128→64
-    - 9 bloques residuales con BN+ReLU+Dropout (64×64)
-    - ConvTranspose (upsampling 1): 64→128
-    - ConvTranspose (upsampling 2): 128→256
-    - Conv 3×3 final + Tanh
+    - Conv inicial con BatchNorm
+    - 9 bloques residuales con BatchNorm + Dropout (full resolution)
+    - Conv de salida + Tanh
     - Output: 3 channels (Stego Image) × 256×256
     
     Args:
@@ -74,7 +74,7 @@ class ResNetEncoder(nn.Module):
         base_channels: Canales base para convoluciones (default: 64)
         num_residual_blocks: Número de bloques residuales (default: 9)
         use_dropout: Usar dropout en bloques residuales (default: True)
-        dropout_rate: Tasa de dropout (default: 0.5)
+        dropout_rate: Tasa de dropout (default: 0.3)
     """
     
     def __init__(
@@ -83,7 +83,7 @@ class ResNetEncoder(nn.Module):
         base_channels=64,  # Paper uses 64 channels
         num_residual_blocks=9,
         use_dropout=True,
-        dropout_rate=0.5
+        dropout_rate=0.3  # Reducido para mejor convergencia
     ):
         super(ResNetEncoder, self).__init__()
         
@@ -91,22 +91,14 @@ class ResNetEncoder(nn.Module):
         self.base_channels = base_channels
         self.num_residual_blocks = num_residual_blocks
         
-        # ============ DOWNSAMPLING (Paper: 2 conv layers stride 2) ============
-        # Conv 1: 6 -> base_channels, 256x256 -> 128x128
-        self.down1 = nn.Sequential(
-            nn.Conv2d(input_channels, base_channels, kernel_size=3, stride=2, padding=1, bias=False),
+        # ============ INPUT LAYER (sin downsampling para preservar detalles) ============
+        self.conv_input = nn.Sequential(
+            nn.Conv2d(input_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(base_channels),
             nn.ReLU(inplace=True)
         )
         
-        # Conv 2: base_channels -> base_channels, 128x128 -> 64x64
-        self.down2 = nn.Sequential(
-            nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(base_channels),
-            nn.ReLU(inplace=True)
-        )
-        
-        # ============ RESIDUAL BLOCKS (Paper: 9 blocks at 64x64) ============
+        # ============ RESIDUAL BLOCKS (9 blocks at full resolution) ============
         residual_blocks = []
         for _ in range(num_residual_blocks):
             residual_blocks.append(
@@ -114,24 +106,16 @@ class ResNetEncoder(nn.Module):
             )
         self.residual_layers = nn.Sequential(*residual_blocks)
         
-        # ============ UPSAMPLING (Paper: 2 deconv layers) ============
-        # Deconv 1: 64x64 -> 128x128
-        self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(base_channels, base_channels, kernel_size=4, stride=2, padding=1, bias=False),
+        # ============ OUTPUT LAYER ============
+        # Conv intermedia para refinar features
+        self.conv_refine = nn.Sequential(
+            nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(base_channels),
             nn.ReLU(inplace=True)
         )
         
-        # Deconv 2: 128x128 -> 256x256
-        self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(base_channels, base_channels // 2, kernel_size=4, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(base_channels // 2),
-            nn.ReLU(inplace=True)
-        )
-        
-        # ============ OUTPUT LAYER ============
         # Conv final para generar stego image
-        self.conv_output = nn.Conv2d(base_channels // 2, 3, kernel_size=3, padding=1, bias=False)
+        self.conv_output = nn.Conv2d(base_channels, 3, kernel_size=3, padding=1, bias=True)
         self.tanh = nn.Tanh()  # Output en rango [-1, 1]
         
     def forward(self, cover, secret):
@@ -148,16 +132,14 @@ class ResNetEncoder(nn.Module):
         # Concatenar cover y secret (B, 6, 256, 256)
         x = torch.cat([cover, secret], dim=1)
         
-        # Downsampling
-        x = self.down1(x)            # (B, 64, 128, 128)
-        x = self.down2(x)            # (B, 64, 64, 64)
+        # Input conv (sin cambio de resolución)
+        x = self.conv_input(x)       # (B, 64, 256, 256)
         
-        # Residual blocks
-        x = self.residual_layers(x)  # (B, 64, 64, 64)
+        # Residual blocks (full resolution)
+        x = self.residual_layers(x)  # (B, 64, 256, 256)
         
-        # Upsampling
-        x = self.up1(x)              # (B, 64, 128, 128)
-        x = self.up2(x)              # (B, 32, 256, 256)
+        # Refinamiento
+        x = self.conv_refine(x)      # (B, 64, 256, 256)
         
         # Output
         x = self.conv_output(x)      # (B, 3, 256, 256)
