@@ -405,6 +405,13 @@ def main():
     disc_updates = update_strategy.get('discriminator_updates_per_batch', 5)
     gen_updates = update_strategy.get('generator_updates_per_batch', 1)
     
+    # Get actual loss weights from config
+    loss_config = config.get('loss', {})
+    alpha = loss_config.get('alpha', 0.3)
+    beta = loss_config.get('beta', 15.0)
+    gamma = loss_config.get('gamma', 0.03)
+    disc_type = config.get('training', {}).get('optimizer', {}).get('discriminator', {}).get('type', 'sgd').upper()
+    
     print(f"\n{'='*70}")
     print(f"STARTING TRAINING")
     print(f"{'='*70}")
@@ -412,8 +419,8 @@ def main():
     print(f"Batch size: {config.get('data', {}).get('batch_size', 32)}")
     print(f"Strategy: {disc_updates}:{gen_updates} (Discriminator:Generator)")
     print(f"Optimizer G: Adam lr={config.get('training', {}).get('optimizer', {}).get('generator', {}).get('lr', 1e-3)}")
-    print(f"Optimizer D: SGD lr={config.get('training', {}).get('optimizer', {}).get('discriminator', {}).get('lr', 1e-3)}")
-    print(f"Loss weights: α=0.3, β=15.0, γ=0.03")
+    print(f"Optimizer D: {disc_type} lr={config.get('training', {}).get('optimizer', {}).get('discriminator', {}).get('lr', 1e-3)}")
+    print(f"Loss weights: α={alpha}, β={beta}, γ={gamma}")
     print(f"{'='*70}\n")
     
     # Entrenar

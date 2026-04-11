@@ -1,0 +1,156 @@
+# 🎯 CONFIGURACIÓN PURA RECONSTRUCCIÓN (SIN ADVERSARIAL)
+# 
+# ESTRATEGIA: Entrenar solo Encoder+Decoder sin Discriminador
+# El discriminador estaba dominando y degradando el PSNR.
+# 
+# Una vez que el PSNR suba (>25 dB), se puede reactivar gamma
+# para fine-tuning adversarial.
+
+project:
+  name: "DCT-GAN-PureReconstruction"
+  description: "Sin adversarial - solo MSE + Cross Entropy"
+  seed: 42
+
+# Dataset Configuration
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 16
+
+# ============================================================================
+# MODEL ARCHITECTURE
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2           # Reducido aún más
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+# DCT Configuration
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# ============================================================================
+# LOSS FUNCTIONS - CLAVE: gamma=0 (SIN ADVERSARIAL)
+# ============================================================================
+loss:
+  # ⬆️ MÁXIMO peso a MSE - queremos reconstrucción perfecta
+  alpha: 2.0
+  
+  # Peso moderado a recuperación del secreto
+  beta: 10.0
+  
+  # ⚠️ GAMMA = 0: DESACTIVAMOS COMPLETAMENTE EL DISCRIMINADOR
+  gamma: 0.0
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# ============================================================================
+# TRAINING - OPTIMIZADA PARA RECONSTRUCCIÓN
+# ============================================================================
+training:
+  num_epochs: 100
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0  # No actualizar D (gamma=0)
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3                # LR más alto para converger más rápido
+      betas: [0.9, 0.999]       # Betas estándar (no GAN)
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"              # No se usa pero necesario para config
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+# Learning Rate Scheduler
+scheduler:
+  type: "step_lr"
+  step_size: 30
+  gamma: 0.5
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: false
+
+# Logging & Checkpoints
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 20
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# PLAN DE ENTRENAMIENTO EN 2 FASES:
+# =============================================================================
+# FASE 1 (este config): gamma=0
+#   - Entrenar hasta PSNR > 25-30 dB
+#   - Sin presión del discriminador
+#   - El encoder/decoder aprenden reconstrucción pura
+#
+# FASE 2 (después): gamma=0.001 a 0.01
+#   - Reactivar discriminador con peso muy bajo
+#   - Fine-tuning para hacer stego indistinguible
+#   - Usar checkpoint de fase 1 como punto de partida
+# =============================================================================

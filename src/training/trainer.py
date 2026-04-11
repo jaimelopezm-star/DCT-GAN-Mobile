@@ -337,11 +337,18 @@ class DCTGANTrainer:
                 d_real_accum += disc_metrics['D_real']
                 d_fake_accum += disc_metrics['D_fake']
             
-            # Promediar métricas de discriminador
-            loss_D_avg = d_loss_accum / disc_updates_per_batch
-            gp_avg = d_gp_accum / disc_updates_per_batch
-            d_real_avg = d_real_accum / disc_updates_per_batch
-            d_fake_avg = d_fake_accum / disc_updates_per_batch
+            # Promediar métricas de discriminador (manejar caso disc_updates=0)
+            if disc_updates_per_batch > 0:
+                loss_D_avg = d_loss_accum / disc_updates_per_batch
+                gp_avg = d_gp_accum / disc_updates_per_batch
+                d_real_avg = d_real_accum / disc_updates_per_batch
+                d_fake_avg = d_fake_accum / disc_updates_per_batch
+            else:
+                # Sin entrenamiento de discriminador (gamma=0)
+                loss_D_avg = 0.0
+                gp_avg = 0.0
+                d_real_avg = 0.0
+                d_fake_avg = 0.0
             
             # ============================================
             # 2. ENTRENAR GENERATOR (ENCODER + DECODER)
