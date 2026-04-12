@@ -1,0 +1,206 @@
+# 🎯 CONFIGURACIÓN: RESIDUAL + DISCRIMINATOR 5D:1G
+#
+# COMBINACIÓN DE LOS DOS FIXES CRÍTICOS:
+# 1. Arquitectura residual (stego = cover + 0.1*residual) ✅ Probado funcional
+# 2. Discriminador 5D:1G (5 updates D, 1 update G)     ✅ Implementado pero no usado con residual
+#
+# EXPECTATIVA:
+# - Visual PSNR: 23 dB (baseline) → 28-32 dB (con adversarial)
+# - Recovery: Mantener >20 dB (ya funciona con scale=0.1)
+# - SSIM: Mantener ~0.97 o mejor
+#
+# Este es el ÚNICO experimento pendiente que combina ambas mejoras.
+
+project:
+  name: "DCT-GAN-Residual-Adversarial"
+  description: "Residual architecture + 5D:1G discriminator (UNTESTED COMBINATION)"
+  seed: 42
+
+# Dataset
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 16
+
+# ============================================================================
+# MODELO CON ARQUITECTURA RESIDUAL
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    # *** CLAVE: scale=0.1 ya probado como FUNCIONAL para recovery ***
+    residual_scale: 0.1
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+# DCT (requerido por arquitectura)
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# ============================================================================
+# LOSS: CON ADVERSARIAL ACTIVADO
+# ============================================================================
+loss:
+  # Peso MSE (calidad visual del stego vs cover)
+  alpha: 2.0
+  
+  # Peso recovery (secreto vs recovered)
+  beta: 10.0
+  
+  # *** ACTIVAR ADVERSARIAL LOSS ***
+  gamma: 1.0
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# ============================================================================
+# TRAINING: RATIO 5D:1G (PAPER-COMPLIANT)
+# ============================================================================
+training:
+  num_epochs: 100
+  
+  update_strategy:
+    # *** CLAVE: 5 updates discriminador, 1 update generator ***
+    discriminator_updates_per_batch: 5
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3      # LR moderado
+      betas: [0.9, 0.999]
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"
+      lr: 5.0e-4      # LR más bajo que generator (balance)
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+scheduler:
+  type: "step_lr"
+  step_size: 30
+  gamma: 0.5
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: true   # Activar AMP para velocidad
+
+logging:
+  log_frequency: 10
+  save_frequency: 5
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+    - discriminator_loss
+    - generator_loss
+    - adversarial_loss
+
+early_stopping:
+  enabled: true
+  patience: 30      # Más paciencia (adversarial toma más tiempo)
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# EXPLICACIÓN DEL EXPERIMENTO:
+# =============================================================================
+# 
+# BASELINE (Experimento 7 - residual_stego.yaml):
+#   - residual_scale = 0.1
+#   - gamma = 0.0 (discriminador OFF)
+#   - Visual PSNR: 23.35 dB ✅
+#   - Recovery PSNR: >20 dB ✅
+#   - Funcional: SÍ ✅
+#
+# ESTE EXPERIMENTO (13):
+#   - residual_scale = 0.1 (MISMO)
+#   - gamma = 1.0 (discriminador ON) ← CAMBIO
+#   - discriminator_updates = 5
+#   - generator_updates = 1
+#
+# EXPECTATIVA:
+#   - El discriminador ayudará a hacer stego más imperceptible
+#   - PSNR debería mejorar de 23 → 28-32 dB
+#   - Recovery debería mantenerse (>20 dB)
+#   - Costo: ~$1-2 RunPod, ~1-2 horas training
+#
+# POR QUÉ ES IMPORTANTE:
+#   Este es el ÚNICO test que falta. Tenemos:
+#     - Arquitectura residual ✅ probada (funciona)
+#     - Discriminador 5D:1G ✅ implementado (Abril 7)
+#     - NUNCA probados JUNTOS ❌
+#
+# RIESGO: BAJO
+#   - Ambos componentes validados independientemente
+#   - Peor caso: PSNR se mantiene en 23 dB (no empeora)
+#   - Mejor caso: PSNR 28-32 dB (cierra 20-30% del gap al paper)
+#
+# =============================================================================
+#
+# HISTORIAL DE EXPERIMENTOS RELACIONADOS:
+# =============================================================================
+# Exp 4:  5D:1G sin residual → 17.63 dB (discriminador funciona)
+# Exp 7:  Residual 0.1 sin disc → 23.35 dB ✅ (recovery OK)
+# Exp 8:  Residual 0.01 sin disc → 79 dB visual, recovery FALLA
+# Exp 9:  Residual 0.03 sin disc → 32 dB visual, recovery FALLA
+# Exp 11: Residual 0.07 sin disc → 26 dB visual, recovery FALLA
+# Exp 12: Residual 0.09 sin disc → 24.5 dB visual, recovery FALLA
+# Exp 13: Residual 0.1 CON disc → ?? (ESTE EXPERIMENTO)
+# =============================================================================
+#
+# COMANDO RECOMENDADO PARA RUNPOD:
+# =============================================================================
+# cd /workspace/DCT-GAN-Mobile
+# python train.py --config configs/residual_with_discriminator.yaml
+#
+# EVALUACIÓN POST-TRAINING:
+# python evaluate_recovery.py \
+#   --checkpoint checkpoints/checkpoint_best_psnr.pth \
+#   --config configs/residual_with_discriminator.yaml
+# =============================================================================
