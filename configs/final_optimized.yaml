@@ -1,0 +1,210 @@
+# 🎯 EXPERIMENTO FINAL: BEST OF ALL (Sin discriminador, optimizado)
+#
+# COMBINACIÓN DE LO MEJOR DE CADA EXPERIMENTO:
+# - Exp 7: residual_scale=0.1 (único que funciona recovery)
+# - Exp 13-14: Learning rates y optimizaciones de training
+# - Sin discriminador: Evita colapso NaN, mantiene estabilidad
+#
+# MEJORAS SOBRE BASELINE (Exp 7):
+# 1. Batch size: 16 → 32 (gradientes más estables)
+# 2. Scheduler: StepLR → CosineAnnealing (mejor convergencia)
+# 3. Learning rate G: 1e-3 → 5e-4 (más conservador)
+# 4. Epochs: 150 → 200 (más tiempo para converger)
+# 5. Alpha/Beta optimizados: Balance visual + recovery
+# 6. Weight decay aumentado: Mejor regularización
+#
+# EXPECTATIVA:
+# - Visual PSNR: 23-25 dB (similar o mejor que Exp 7)
+# - Recovery PSNR: >20 dB (garantizado con scale=0.1)
+# - SSIM: 0.97+ (igual o mejor)
+# - ESTABILIDAD: Sin NaN, training completo hasta epoch 200
+
+project:
+  name: "DCT-GAN-Final-Optimized"
+  description: "Best of all experiments - No discriminator, optimized hyperparameters"
+  seed: 42
+
+# ============================================================================
+# DATASET
+# ============================================================================
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 32  # Era 16, ahora 32 (gradientes más estables)
+
+# ============================================================================
+# MODELO CON ARQUITECTURA RESIDUAL
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    # CLAVE: scale=0.1 es el ÚNICO que funciona
+    residual_scale: 0.1
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# ============================================================================
+# LOSS: SIN ADVERSARIAL (estabilidad garantizada)
+# ============================================================================
+loss:
+  # OPTIMIZADO: Balance entre visual y recovery
+  alpha: 2.5  # Era 2.0, ligero énfasis en calidad visual
+  beta: 10.0  # Mantener alto peso en recovery
+  
+  # SIN ADVERSARIAL (evita colapso NaN)
+  gamma: 0.0
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# ============================================================================
+# TRAINING: HIPERPARÁMETROS OPTIMIZADOS
+# ============================================================================
+training:
+  num_epochs: 200  # Era 150, ahora 200 (más convergencia)
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0  # OFF
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 5.0e-4      # Era 1e-3, ahora más conservador (de Exp 14)
+      betas: [0.9, 0.999]
+      weight_decay: 0.001  # Era 0.0001, ahora 10× mayor (regularización)
+    
+    discriminator:
+      type: "adam"
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.001
+
+# ============================================================================
+# SCHEDULER: COSINE ANNEALING (mejor que StepLR)
+# ============================================================================
+scheduler:
+  type: "cosine"      # Era step_lr, ahora cosine (convergencia más suave)
+  T_max: 200          # Total epochs
+  eta_min: 1.0e-6     # LR mínimo al final
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: true  # AMP para velocidad
+
+logging:
+  log_frequency: 10
+  save_frequency: 10  # Guardar cada 10 epochs
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+early_stopping:
+  enabled: true
+  patience: 50  # Paciencia alta (epoch 200 total)
+  metric: "psnr"
+  mode: "max"
+
+# =============================================================================
+# JUSTIFICACIÓN DE CAMBIOS vs EXPERIMENTO 7 (Baseline):
+# =============================================================================
+#
+# CAMBIO 1 - Batch size 16→32:
+#   - Gradientes más estables
+#   - Menos ruido en updates
+#   - Mejor uso de GPU
+#
+# CAMBIO 2 - Scheduler Step→Cosine:
+#   - Convergencia más suave
+#   - Evita drops abruptos en LR
+#   - Mejores resultados finales
+#
+# CAMBIO 3 - LR 1e-3→5e-4:
+#   - Más conservador (aprendido de Exp 14)
+#   - Evita overshooting
+#   - Convergencia más controlada
+#
+# CAMBIO 4 - Epochs 150→200:
+#   - Más tiempo para encontrar óptimo
+#   - Con cosine scheduler aprovecha mejor
+#   - Early stopping protege de overfitting
+#
+# CAMBIO 5 - Alpha 2.0→2.5:
+#   - Ligero énfasis en calidad visual
+#   - Sin sacrificar recovery (beta=10)
+#
+# CAMBIO 6 - Weight decay 0.0001→0.001:
+#   - Mayor regularización
+#   - Previene overfitting en 200 epochs
+#   - Weights más generalizables
+#
+# =============================================================================
+#
+# COMPARACIÓN ESPERADA:
+# =============================================================================
+# Exp 7 (Baseline):      PSNR 23.35 dB, Recovery >20 dB ✅
+# Exp 15 (Este - Final): PSNR 24-26 dB, Recovery >20 dB ✅ (mejora marginal)
+#
+# Lógica: No esperamos mejora dramática (arquitectura es la misma),
+# pero optimizaciones deberían dar +1-3 dB con mismo recovery funcional.
+#
+# =============================================================================
+#
+# COMANDO PARA ENTRENAR:
+# =============================================================================
+# cd /workspace/DCT-GAN-Mobile
+# python train.py --config configs/final_optimized.yaml
+#
+# EVALUACIÓN POST-TRAINING:
+# python evaluate_recovery.py \
+#   --checkpoint checkpoints/best_model.pth \
+#   --config configs/final_optimized.yaml
+# =============================================================================
