@@ -1,0 +1,81 @@
+# ============================================================
+# EXP 18: SteganoGAN-Style Dense Architecture
+# ============================================================
+#
+# CAMBIO METODOLÓGICO: Arquitectura inspirada en SteganoGAN (MIT)
+# que ha demostrado funcionar con ~37 dB PSNR
+#
+# Diferencias clave vs experimentos anteriores:
+# 1. Dense connections (no solo residual)
+# 2. Loss weights INVERTIDOS: 100*MSE + 1*Recovery
+# 3. Sin DCT (dominio espacial directo)
+# 4. Sin discriminador inicialmente
+#
+# Referencia: https://github.com/DAI-Lab/SteganoGAN
+# Paper: Zhang et al. "SteganoGAN: High Capacity Image Steganography with GANs" (2019)
+#
+# Objetivo:
+#   - Visual PSNR: ≥ 30 dB (SteganoGAN logra ~37 dB)
+#   - Recovery PSNR: ≥ 20 dB (CRÍTICO - donde fallamos antes)
+#
+# ============================================================
+
+experiment:
+  name: "exp18_steganogan_style"
+  description: "Dense architecture inspired by SteganoGAN with inverted loss weights"
+  
+model:
+  encoder_type: "dense"        # dense o dense_large
+  decoder_type: "dense"        # dense, dense_large, dense_skip
+  hidden_size: 64              # Canales ocultos (SteganoGAN usa 64)
+  
+training:
+  epochs: 200
+  batch_size: 8                # Puede aumentar si hay memoria
+  lr: 1e-4                     # SteganoGAN usa 1e-4
+  image_size: 256
+  patience: 100                # Early stopping
+  save_every: 20
+  
+loss:
+  # CLAVE: SteganoGAN usa 100*MSE + 1*BCE
+  # Nosotros usábamos 0.3*MSE + 15*BCE (¡al revés!)
+  mse_weight: 100.0            # Alto peso a calidad visual
+  rec_weight: 1.0              # Peso estándar a recovery
+  
+data:
+  train_dir: "data/div2k/train"
+  val_dir: "data/div2k/val"
+  
+checkpoint:
+  checkpoint_dir: "checkpoints/exp18_steganogan"
+  
+# ============================================================
+# NOTAS IMPORTANTES
+# ============================================================
+#
+# ¿Por qué este cambio?
+# ---------------------
+# En 17 experimentos previos, el problema era que la recuperación
+# del secreto siempre fallaba. Analizando SteganoGAN que SÍ funciona:
+#
+# 1. Sus loss weights son 100:1 (MSE:Recovery)
+#    Nosotros usábamos 0.3:15 (¡invertido!)
+#
+# 2. Usa dense connections que permiten mejor flujo de gradientes
+#    Nosotros usábamos residual simple
+#
+# 3. No usa DCT - trabaja directamente en dominio espacial
+#    El DCT puede estar complicando la recuperación
+#
+# Hipótesis
+# ---------
+# - Con MSE muy alto, el encoder aprende a hacer stego ≈ cover
+# - Pero el secreto se embebe de forma que el decoder puede extraerlo
+# - El balance 100:1 permite ambos objetivos
+#
+# Con nuestro balance anterior (0.3:15):
+# - El MSE era tan bajo que el encoder podía alterar mucho la imagen
+# - Pero eso no ayudaba al decoder a extraer el secreto
+#
+# ============================================================
