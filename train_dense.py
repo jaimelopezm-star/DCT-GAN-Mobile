@@ -240,6 +240,7 @@ def main():
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints/exp18', help='Checkpoint directory')
     parser.add_argument('--save_every', type=int, default=10, help='Save checkpoint every N epochs')
     parser.add_argument('--patience', type=int, default=50, help='Early stopping patience')
+    parser.add_argument('--resume_checkpoint', type=str, default=None, help='Path to checkpoint for fine-tuning')
     
     args = parser.parse_args()
     
@@ -258,6 +259,21 @@ def main():
         for key, value in config.get('loss', {}).items():
             if hasattr(args, key):
                 setattr(args, key, value)
+
+        # Optional data/checkpoint sections
+        data_cfg = config.get('data', {})
+        if 'train_dir' in data_cfg:
+            args.data_dir = data_cfg['train_dir']
+        if 'val_dir' in data_cfg:
+            args.val_dir = data_cfg['val_dir']
+
+        ckpt_cfg = config.get('checkpoint', {})
+        if 'checkpoint_dir' in ckpt_cfg:
+            args.checkpoint_dir = ckpt_cfg['checkpoint_dir']
+
+        fine_tune_cfg = config.get('fine_tune', {})
+        if 'resume_checkpoint' in fine_tune_cfg:
+            args.resume_checkpoint = fine_tune_cfg['resume_checkpoint']
         
         # Ensure numeric types
         args.lr = float(args.lr)
@@ -267,6 +283,7 @@ def main():
         args.batch_size = int(args.batch_size)
         args.hidden_size = int(args.hidden_size)
         args.patience = int(args.patience)
+        args.save_every = int(args.save_every)
     
     # Setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -278,6 +295,10 @@ def main():
     print(f"Hidden size: {args.hidden_size}")
     print(f"Loss weights: MSE={args.mse_weight}, Recovery={args.rec_weight}")
     print(f"Learning rate: {args.lr}")
+    print(f"Train dir: {args.data_dir}")
+    print(f"Val dir: {args.val_dir}")
+    if args.resume_checkpoint:
+        print(f"Resume checkpoint: {args.resume_checkpoint}")
     print(f"{'='*60}\n")
     
     # Create checkpoint dir
@@ -298,6 +319,26 @@ def main():
     
     encoder = encoder.to(device)
     decoder = decoder.to(device)
+
+    # Optional resume for fine-tuning
+    start_epoch = 1
+    best_psnr = 0.0
+    best_rec_psnr = 0.0
+    history = []
+
+    if args.resume_checkpoint:
+        if not os.path.exists(args.resume_checkpoint):
+            raise FileNotFoundError(f"Checkpoint no encontrado: {args.resume_checkpoint}")
+
+        checkpoint = torch.load(args.resume_checkpoint, map_location=device)
+        encoder.load_state_dict(checkpoint['encoder_state_dict'])
+        decoder.load_state_dict(checkpoint['decoder_state_dict'])
+        start_epoch = int(checkpoint.get('epoch', 0)) + 1
+        best_psnr = float(checkpoint.get('val_psnr', 0.0))
+        best_rec_psnr = float(checkpoint.get('val_rec_psnr', 0.0))
+        history = checkpoint.get('history', [])
+        print(f"Checkpoint cargado. Reanudando desde epoch {start_epoch}.")
+        print(f"Mejor previo: PSNR={best_psnr:.2f}, Rec PSNR={best_rec_psnr:.2f}")
     
     print(f"Encoder parameters: {encoder.get_num_params():,}")
     print(f"Decoder parameters: {decoder.get_num_params():,}")
@@ -320,13 +361,10 @@ def main():
     optimizer = optim.Adam(params, lr=args.lr)
     
     # Training loop
-    best_psnr = 0
-    best_rec_psnr = 0
     patience_counter = 0
-    
-    history = []
-    
-    for epoch in range(1, args.epochs + 1):
+
+    end_epoch = start_epoch + args.epochs - 1
+    for epoch in range(start_epoch, end_epoch + 1):
         # Train
         train_metrics = train_epoch(
             encoder, decoder, train_loader, optimizer, device,
@@ -345,7 +383,7 @@ def main():
         history.append(metrics)
         
         # Print epoch summary
-        print(f"\nEpoch {epoch}/{args.epochs}")
+        print(f"\nEpoch {epoch}/{end_epoch}")
         print(f"  Train - Loss: {train_metrics['loss']:.4f}, PSNR: {train_metrics['psnr']:.2f} dB, Rec PSNR: {train_metrics['rec_psnr']:.2f} dB")
         print(f"  Val   - Loss: {val_metrics['val_loss']:.4f}, PSNR: {val_metrics['val_psnr']:.2f} dB, Rec PSNR: {val_metrics['val_rec_psnr']:.2f} dB")
         

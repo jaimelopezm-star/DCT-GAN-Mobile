@@ -1,0 +1,35 @@
+# EXP 18B: Fine-tuning enfocado en Recovery
+# Usa el mejor checkpoint de exp18 como punto de partida.
+
+experiment:
+  name: "exp18_finetune_recovery"
+  description: "Fine-tuning from best exp18 checkpoint to push recovery PSNR"
+
+model:
+  encoder_type: "dense"
+  decoder_type: "dense"
+  hidden_size: 64
+
+training:
+  # Epochs ADICIONALES sobre el checkpoint cargado
+  epochs: 60
+  batch_size: 8
+  lr: 5e-5
+  image_size: 256
+  patience: 30
+  save_every: 10
+
+loss:
+  # Conserva calidad visual, pero da mas fuerza a recovery
+  mse_weight: 100.0
+  rec_weight: 2.0
+
+data:
+  train_dir: "/workspace/DIV2K_prepared/train/images"
+  val_dir: "/workspace/DIV2K_prepared/val/images"
+
+checkpoint:
+  checkpoint_dir: "checkpoints/exp18_finetune_recovery"
+
+fine_tune:
+  resume_checkpoint: "checkpoints/exp18_steganogan/best_model.pth"
