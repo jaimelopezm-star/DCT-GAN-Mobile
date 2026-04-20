@@ -1,0 +1,170 @@
+# 🎯 EXPERIMENTO 16: DATASET REAL DIV2K
+#
+# CONFIGURACIÓN: Basada en Exp 7 (ganador) con dataset real
+#
+# CAMBIOS vs Exp 7:
+# - Dataset: Sintético (640) → DIV2K (800 train)
+# - Épocas: 150 → 300 (dataset real requiere más tiempo)
+# - Early stopping: 50 → 100 (más paciencia con dataset real)
+# - Batch size: 16 → 32 (mejor para dataset grande)
+# - Save frequency: 10 → 20 (menos checkpoints)
+#
+# EXPECTATIVA:
+# - Visual PSNR: 25-30 dB (+2-7 dB vs Exp 7)
+# - Recovery PSNR: >20 dB (mantener funcionalidad)
+# - Tiempo: ~8-12 horas en RTX 4090
+# - Costo: ~$25-35 en RunPod
+
+project:
+  name: "DCT-GAN-Exp16-Real-Dataset"
+  description: "Exp 7 con dataset DIV2K real - 300 épocas"
+  seed: 42
+
+# ============================================================================
+# DATASET REAL DIV2K
+# ============================================================================
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"  # Path en RunPod
+  train_size: 640     # DIV2K tiene ~800 imágenes train
+  val_size: 80        # ~100 imágenes val
+  test_size: 80       # ~100 imágenes test
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 32      # ↑ De 16 a 32 (dataset grande)
+
+# ============================================================================
+# MODELO: IDÉNTICO A EXP 7 (arquitectura ganadora)
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    residual_scale: 0.1     # ⭐ El único valor funcional
+  
+  decoder:
+    type: "cnn"
+    num_layers: 6
+    base_channels: 64
+    output_channels: 3
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+# DCT (no usado pero requerido)
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# ============================================================================
+# LOSS: IDÉNTICA A EXP 7
+# ============================================================================
+loss:
+  alpha: 2.0          # Peso visual
+  beta: 10.0          # Peso recovery (5× mayor que alpha)
+  gamma: 0.0          # Sin discriminador (estabilidad)
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# ============================================================================
+# TRAINING: Adaptado para dataset real
+# ============================================================================
+training:
+  num_epochs: 300     # ↑ De 150 a 300 (dataset real necesita más)
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0  # Sin discriminador
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 1.0e-3      # LR idéntico a Exp 7
+      betas: [0.9, 0.999]
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+# Scheduler idéntico a Exp 7
+scheduler:
+  type: "step_lr"
+  step_size: 30
+  gamma: 0.5
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: true   # ✅ Activado para acelerar
+
+logging:
+  log_frequency: 10
+  save_frequency: 20      # ↑ De 10 a 20 (menos checkpoints)
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+# Early stopping con más paciencia
+early_stopping:
+  enabled: true
+  patience: 100     # ↑ De 50 a 100 (dataset real converge más lento)
+  metric: "psnr"
+  mode: "max"
+
+# ============================================================================
+# RAZÓN DE ESTE EXPERIMENTO:
+# ============================================================================
+# 
+# Exp 7 logró 23.35 dB con dataset SINTÉTICO (640 imágenes aleatorias)
+# 
+# Con dataset REAL DIV2K (800 imágenes naturales de alta calidad):
+# - Mejor variedad de texturas y patrones
+# - Imágenes naturales vs ruido sintético
+# - Mayor capacidad de generalización
+# - Esperamos mejora de +2 a +7 dB
+#
+# Si logramos 28-30 dB con recovery >20 dB:
+# - Gap al paper: 58.27 → 30 = -48% (vs actual -60%)
+# - Mejora significativa manteniendo funcionalidad
+# - Evidencia de que el límite es arquitectural, no de datos
+#
+# Si NO mejora significativamente (23-24 dB):
+# - Confirma que el límite es puramente arquitectural
+# - Decoder (151K params) es el cuello de botella
+# - Requiere cambio arquitectural profundo
+#
+# ============================================================================
