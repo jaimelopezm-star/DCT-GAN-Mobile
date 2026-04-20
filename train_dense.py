@@ -258,6 +258,15 @@ def main():
         for key, value in config.get('loss', {}).items():
             if hasattr(args, key):
                 setattr(args, key, value)
+        
+        # Ensure numeric types
+        args.lr = float(args.lr)
+        args.mse_weight = float(args.mse_weight)
+        args.rec_weight = float(args.rec_weight)
+        args.epochs = int(args.epochs)
+        args.batch_size = int(args.batch_size)
+        args.hidden_size = int(args.hidden_size)
+        args.patience = int(args.patience)
     
     # Setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
