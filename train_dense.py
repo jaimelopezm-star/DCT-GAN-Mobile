@@ -38,6 +38,37 @@ from src.models.dense_encoder import DenseEncoder, DenseEncoderLarge
 from src.models.dense_decoder import DenseDecoder, DenseDecoderLarge, DenseDecoderWithSkip
 
 
+def resolve_checkpoint_path(requested_path, checkpoint_dir):
+    """Resuelve la ruta del checkpoint con fallbacks útiles para RunPod."""
+    candidates = []
+
+    if requested_path:
+        candidates.append(requested_path)
+
+    # Fallbacks comunes
+    candidates.extend([
+        os.path.join(checkpoint_dir, 'best_model.pth'),
+        'checkpoints/exp18_steganogan/best_model.pth',
+        'checkpoints/exp18/best_model.pth',
+        'checkpoints/best_model.pth',
+        'best_model.pth',
+    ])
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    # Último fallback: buscar cualquier best_model.pth en checkpoints/
+    checkpoints_root = Path('checkpoints')
+    if checkpoints_root.exists():
+        found = list(checkpoints_root.rglob('best_model.pth'))
+        if found:
+            found = sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+            return str(found[0])
+
+    return None
+
+
 class ImagePairDataset(Dataset):
     """Dataset que carga pares de imágenes (cover, secret) del mismo directorio"""
     
@@ -327,10 +358,18 @@ def main():
     history = []
 
     if args.resume_checkpoint:
-        if not os.path.exists(args.resume_checkpoint):
-            raise FileNotFoundError(f"Checkpoint no encontrado: {args.resume_checkpoint}")
+        resolved_checkpoint = resolve_checkpoint_path(args.resume_checkpoint, args.checkpoint_dir)
+        if resolved_checkpoint is None:
+            raise FileNotFoundError(
+                "Checkpoint no encontrado. "
+                f"Ruta solicitada: {args.resume_checkpoint}. "
+                "Prueba con una ruta absoluta o verifica checkpoints/exp18_steganogan/ y checkpoints/exp18/."
+            )
 
-        checkpoint = torch.load(args.resume_checkpoint, map_location=device)
+        if resolved_checkpoint != args.resume_checkpoint:
+            print(f"Checkpoint solicitado no encontrado, usando: {resolved_checkpoint}")
+
+        checkpoint = torch.load(resolved_checkpoint, map_location=device)
         encoder.load_state_dict(checkpoint['encoder_state_dict'])
         decoder.load_state_dict(checkpoint['decoder_state_dict'])
         start_epoch = int(checkpoint.get('epoch', 0)) + 1
