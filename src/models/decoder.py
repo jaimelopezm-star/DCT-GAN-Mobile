@@ -244,6 +244,127 @@ class AttentionBlock(nn.Module):
         return x * att
 
 
+class StrongDecoder(nn.Module):
+    """
+    Decoder fuerte con arquitectura U-Net simplificada
+    
+    Diseñado para maximizar capacidad de recuperación del secreto.
+    ~700K-1M parámetros (vs 151K del LightweightDecoder)
+    
+    Arquitectura:
+    - Encoder: 3→64→128→256 (con downsampling)
+    - Bottleneck: 256 canales
+    - Decoder: 256→128→64→3 (con upsampling)
+    - Skip connections entre encoder y decoder
+    
+    Args:
+        base_channels: Canales base (default: 64)
+        use_skip: Usar skip connections (default: True)
+    """
+    
+    def __init__(self, base_channels=64, use_skip=True):
+        super(StrongDecoder, self).__init__()
+        
+        self.use_skip = use_skip
+        
+        # Encoder (downsampling path)
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(3, base_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels, base_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(base_channels, base_channels * 2, 3, 2, 1, bias=False),  # Downsample
+            nn.BatchNorm2d(base_channels * 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels * 2, base_channels * 2, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels * 2),
+            nn.ReLU(inplace=True)
+        )
+        
+        self.enc3 = nn.Sequential(
+            nn.Conv2d(base_channels * 2, base_channels * 4, 3, 2, 1, bias=False),  # Downsample
+            nn.BatchNorm2d(base_channels * 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels * 4, base_channels * 4, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels * 4),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Bottleneck
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(base_channels * 4, base_channels * 4, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels * 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels * 4, base_channels * 4, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels * 4),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Decoder (upsampling path)
+        self.up3 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, 2, 2)  # Upsample
+        skip_channels = base_channels * 2 if use_skip else 0
+        self.dec3 = nn.Sequential(
+            nn.Conv2d(base_channels * 2 + skip_channels, base_channels * 2, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels * 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels * 2, base_channels * 2, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels * 2),
+            nn.ReLU(inplace=True)
+        )
+        
+        self.up2 = nn.ConvTranspose2d(base_channels * 2, base_channels, 2, 2)  # Upsample
+        skip_channels = base_channels if use_skip else 0
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(base_channels + skip_channels, base_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels, base_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Final output
+        self.final = nn.Sequential(
+            nn.Conv2d(base_channels, base_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels, 3, 1, 1, 0),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, stego):
+        # Encoder
+        e1 = self.enc1(stego)      # 256x256, 64ch
+        e2 = self.enc2(e1)          # 128x128, 128ch
+        e3 = self.enc3(e2)          # 64x64, 256ch
+        
+        # Bottleneck
+        b = self.bottleneck(e3)     # 64x64, 256ch
+        
+        # Decoder con skip connections
+        d3 = self.up3(b)            # 128x128, 128ch
+        if self.use_skip:
+            d3 = torch.cat([d3, e2], dim=1)
+        d3 = self.dec3(d3)
+        
+        d2 = self.up2(d3)           # 256x256, 64ch
+        if self.use_skip:
+            d2 = torch.cat([d2, e1], dim=1)
+        d2 = self.dec2(d2)
+        
+        # Output
+        out = self.final(d2)
+        return out
+    
+    def get_num_params(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
 class EnhancedLightweightDecoder(nn.Module):
     """
     Versión mejorada del Lightweight Decoder con atención
@@ -336,6 +457,11 @@ def create_decoder(config):
             output_channels=config.get('output_channels', 3),
             use_attention=config.get('use_attention', True)
         )
+    elif decoder_type == 'strong':
+        return StrongDecoder(
+            base_channels=config.get('base_channels', 64),
+            use_skip=config.get('use_skip', True)
+        )
     else:
         raise ValueError(f"Unknown decoder type: {decoder_type}")
 
@@ -374,3 +500,20 @@ if __name__ == "__main__":
     secret_enhanced = decoder_enhanced(stego)
     print(f"Output shape: {secret_enhanced.shape}")
     print(f"Parameters: {decoder_enhanced.get_num_params():,}")
+    
+    print("\n" + "="*60)
+    print("Testing Strong Decoder (U-Net style)")
+    print("="*60)
+    
+    decoder_strong = StrongDecoder()
+    secret_strong = decoder_strong(stego)
+    print(f"Output shape: {secret_strong.shape}")
+    print(f"Parameters: {decoder_strong.get_num_params():,}")
+    
+    print("\n" + "="*60)
+    print("COMPARISON SUMMARY")
+    print("="*60)
+    print(f"CNN Decoder:          {decoder_cnn.get_num_params():>10,} params")
+    print(f"Lightweight Decoder:  {decoder_light.get_num_params():>10,} params")
+    print(f"Enhanced Lightweight: {decoder_enhanced.get_num_params():>10,} params")
+    print(f"Strong Decoder:       {decoder_strong.get_num_params():>10,} params")

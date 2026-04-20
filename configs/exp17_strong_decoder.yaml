@@ -1,0 +1,174 @@
+# 🎯 EXPERIMENTO 17: STRONG DECODER + RESIDUAL ALTO
+#
+# CONFIGURACIÓN: Última optimización - máxima capacidad de recovery
+#
+# CAMBIOS CRÍTICOS vs Exp 16:
+# 
+# 1. DECODER: lightweight_cnn (151K) → strong U-Net (~1.2M params)
+#    - Arquitectura U-Net simplificada con skip connections
+#    - 8× más parámetros para mejor extracción del secreto
+#    - Downsample → Bottleneck → Upsample con skips
+#
+# 2. RESIDUAL_SCALE: 0.1 → 0.2 (el doble)
+#    - Más señal del secreto incrustada en el stego
+#    - Sin discriminador (gamma=0) no hay detección adversaria
+#    - Permite al decoder extraer mejor el secreto
+#
+# EXPECTATIVA:
+# - Visual PSNR: ~25-28 dB (menor por residual_scale alto)
+# - Recovery PSNR: >15-20 dB (CRÍTICO - esto es lo importante)
+# - Trade-off: Menor calidad visual por mejor recovery
+#
+# Este es el ÚLTIMO INTENTO antes de aceptar el baseline
+
+project:
+  name: "DCT-GAN-Exp17-Strong-Decoder"
+  description: "Decoder U-Net fuerte + residual_scale=0.2"
+  seed: 42
+
+# ============================================================================
+# DATASET: DIV2K (igual que Exp 16)
+# ============================================================================
+data:
+  dataset_name: "DIV2K"
+  dataset_path: "/workspace/DIV2K_prepared"
+  train_size: 640
+  val_size: 80
+  test_size: 80
+  image_size: 256
+  num_workers: 8
+  pin_memory: true
+  batch_size: 32
+
+# ============================================================================
+# MODELO: CAMBIOS CRÍTICOS
+# ============================================================================
+model:
+  type: "dct_gan"
+  
+  encoder:
+    type: "resnet"
+    num_residual_blocks: 9
+    base_channels: 64
+    input_channels: 6
+    use_dropout: true
+    dropout_rate: 0.2
+    residual_scale: 0.2     # ⭐ CAMBIO: 0.1 → 0.2 (más señal)
+  
+  decoder:
+    type: "strong"          # ⭐ CAMBIO: U-Net decoder
+    base_channels: 64       # 64→128→256 (encoder) → 256→128→64 (decoder)
+    use_skip: true          # Skip connections activadas
+  
+  discriminator:
+    type: "xunet_modified"
+    input_channels: 3
+    base_channels: 32
+    kernel_size: 5
+    num_conv_layers: 5
+    use_srm: false
+    use_spectral_norm: true
+
+# DCT (no usado pero requerido)
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "chaotic_map"
+  embed_in_ac: true
+
+# ============================================================================
+# LOSS: Mayor peso a recovery
+# ============================================================================
+loss:
+  alpha: 1.5          # ↓ Menor peso visual (de 2.0)
+  beta: 15.0          # ↑ Mayor peso recovery (de 10.0)
+  gamma: 0.0          # Sin discriminador
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+  
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+  
+  adversarial_loss:
+    type: "wgan"
+    clip_value: 0.01
+
+# ============================================================================
+# TRAINING: Ajustes para decoder grande
+# ============================================================================
+training:
+  num_epochs: 300
+  
+  update_strategy:
+    discriminator_updates_per_batch: 0
+    generator_updates_per_batch: 1
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+  
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 5.0e-4      # ↓ LR menor (decoder más grande)
+      betas: [0.9, 0.999]
+      weight_decay: 0.0001
+    
+    discriminator:
+      type: "adam"
+      lr: 1.0e-4
+      betas: [0.5, 0.999]
+      weight_decay: 0.0001
+
+scheduler:
+  type: "step_lr"
+  step_size: 50       # ↑ Steps más largos
+  gamma: 0.5
+
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: true
+
+logging:
+  log_frequency: 10
+  save_frequency: 20
+  metrics:
+    - psnr
+    - ssim
+    - mse
+    - rmse
+
+early_stopping:
+  enabled: true
+  patience: 100
+  metric: "psnr"
+  mode: "max"
+
+# ============================================================================
+# RESUMEN DE CAMBIOS vs EXP 7/16
+# ============================================================================
+#
+# | Parámetro        | Exp 7      | Exp 16     | Exp 17 (este)  |
+# |------------------|------------|------------|----------------|
+# | Decoder          | CNN 151K   | CNN 151K   | U-Net ~1.2M    |
+# | residual_scale   | 0.1        | 0.1        | 0.2            |
+# | alpha (visual)   | 2.0        | 2.0        | 1.5            |
+# | beta (recovery)  | 10.0       | 10.0       | 15.0           |
+# | LR               | 1e-3       | 1e-3       | 5e-4           |
+# | Dataset          | Sintético  | DIV2K      | DIV2K          |
+#
+# HIPÓTESIS:
+# El decoder débil (151K) no puede extraer el secreto cuando la señal
+# es muy pequeña (residual_scale=0.1). Con un decoder 8× más grande
+# y el doble de señal (residual_scale=0.2), debería poder recuperar.
+#
+# Si esto falla (recovery <10 dB), entonces:
+# - El problema es fundamental en la arquitectura encoder
+# - O hay un bug en cómo se calcula/aplica el residual
+# - Aceptamos Exp 7 como máximo alcanzable con esta implementación
+#
+# ============================================================================
