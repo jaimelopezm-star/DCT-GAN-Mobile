@@ -1,0 +1,133 @@
+# Stage 4 - Strong Decoder Pivot
+# Uses partial checkpoint resume to transfer encoder/discriminator weights and
+# train a higher-capacity decoder for better secret recovery.
+
+project:
+  name: "Mobile-StegoNet-Stage4-StrongDecoder"
+  description: "Architecture pivot: stronger decoder with partial resume"
+  seed: 42
+
+data:
+  dataset_name: "ImageNet2012"
+  train_size: 40000
+  val_size: 5000
+  test_size: 5000
+  image_size: 256
+  num_workers: 4
+  pin_memory: true
+  batch_size: 24
+
+model:
+  type: "mobile_dct_gan"
+
+  encoder:
+    type: "mobilenetv3_small"
+    width_multiplier: 1.0
+    input_channels: 6
+    use_se: true
+    activation: "hard_swish"
+    dropout_rate: 0.2
+
+  decoder:
+    type: "strong"
+    base_channels: 64
+    use_skip: true
+
+  discriminator:
+    type: "efficient_xunet"
+    input_channels: 3
+    kernel_size: 5
+    num_conv_layers: 4
+    base_channels: 32
+    activation: "leaky_relu"
+    leaky_slope: 0.2
+
+dct:
+  block_size: 8
+  use_zig_zag: true
+  frequency_selection: "adaptive"
+  embed_in_ac: true
+  quantization:
+    enabled: true
+    bits: 16
+
+loss:
+  alpha: 0.7
+  beta: 24.0
+  gamma: 0.0
+
+  mse_loss:
+    type: "mse"
+    reduction: "mean"
+
+  crossentropy_loss:
+    type: "crossentropy"
+    reduction: "mean"
+
+  adversarial_loss:
+    type: "wgan_gp"
+    lambda_gp: 10.0
+
+training:
+  num_epochs: 80
+  early_stopping_patience: 12
+  allow_partial_resume: true
+  reset_on_partial_resume: true
+
+  optimizer:
+    generator:
+      type: "adam"
+      lr: 8.0e-5
+      betas: [0.9, 0.999]
+      weight_decay: 0.005
+
+    discriminator:
+      type: "adam"
+      lr: 1.0e-5
+      betas: [0.9, 0.999]
+      weight_decay: 0.005
+
+  lr_scheduler:
+    type: "step"
+    step_size: 12
+    gamma: 0.7
+
+  update_strategy:
+    discriminator_updates_per_batch: 0
+    generator_updates_per_batch: 1
+
+  gradient_clipping:
+    enabled: true
+    max_norm: 0.5
+
+  mixed_precision:
+    enabled: false
+
+  checkpoint:
+    save_every: 5
+    keep_top_k: 5
+    monitor: "val_psnr"
+    mode: "max"
+
+logging:
+  log_dir: "experiments/mobile_stage4_strong_decoder_logs"
+  tensorboard: true
+  wandb:
+    enabled: false
+    project: "mobile-stegonet"
+
+  log_every_n_steps: 50
+
+  save_images:
+    enabled: true
+    num_samples: 8
+    save_every: 10
+
+hardware:
+  device: "cuda"
+  gpu_ids: [0]
+  num_gpus: 1
+
+reproducibility:
+  deterministic: true
+  benchmark: false

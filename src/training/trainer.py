@@ -607,18 +607,51 @@ class DCTGANTrainer:
             checkpoint_path: Path al archivo de checkpoint
         """
         self.logger.info(f"Loading checkpoint from {checkpoint_path}")
-        
+
         checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
-        self.optimizer_D.load_state_dict(checkpoint['optimizer_D_state_dict'])
-        self.scheduler_G.load_state_dict(checkpoint['scheduler_G_state_dict'])
-        self.scheduler_D.load_state_dict(checkpoint['scheduler_D_state_dict'])
-        
-        self.current_epoch = checkpoint['epoch']
-        self.best_psnr = checkpoint['best_psnr']
-        
+
+        train_cfg = self.config.get('training', {})
+        allow_partial_resume = bool(train_cfg.get('allow_partial_resume', False))
+        reset_on_partial = bool(train_cfg.get('reset_on_partial_resume', True))
+
+        if allow_partial_resume:
+            # Safe partial load for architecture pivots: only copy keys with matching shapes.
+            current_state = self.model.state_dict()
+            ckpt_state = checkpoint.get('model_state_dict', {})
+
+            filtered_state = {}
+            for k, v in ckpt_state.items():
+                if k in current_state and current_state[k].shape == v.shape:
+                    filtered_state[k] = v
+
+            load_result = self.model.load_state_dict(filtered_state, strict=False)
+
+            self.logger.info(
+                "Partial resume enabled: loaded %d/%d tensors | missing=%d unexpected=%d",
+                len(filtered_state),
+                len(current_state),
+                len(load_result.missing_keys),
+                len(load_result.unexpected_keys)
+            )
+
+            if reset_on_partial:
+                self.current_epoch = 0
+                self.best_psnr = 0.0
+                self.logger.info("Reset epoch and best_psnr for partial resume (new stage)")
+            else:
+                self.current_epoch = checkpoint.get('epoch', 0)
+                self.best_psnr = checkpoint.get('best_psnr', 0.0)
+                self.logger.info("Kept epoch/best_psnr from checkpoint under partial resume")
+        else:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
+            self.optimizer_D.load_state_dict(checkpoint['optimizer_D_state_dict'])
+            self.scheduler_G.load_state_dict(checkpoint['scheduler_G_state_dict'])
+            self.scheduler_D.load_state_dict(checkpoint['scheduler_D_state_dict'])
+
+            self.current_epoch = checkpoint['epoch']
+            self.best_psnr = checkpoint['best_psnr']
+
         self.logger.info(f"Checkpoint loaded successfully (epoch {self.current_epoch})")
     
     def train(self, 
