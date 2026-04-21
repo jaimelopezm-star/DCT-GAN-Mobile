@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 from torch import amp
 from pathlib import Path
 import time
+import math
 from typing import Dict, Tuple, Optional, List
 import logging
 from tqdm import tqdm
@@ -275,6 +276,7 @@ class DCTGANTrainer:
         
         # Progress bar
         pbar = tqdm(train_loader, desc=f"Epoch {self.current_epoch+1}")
+        valid_batches = 0
         
         for batch_idx, batch in enumerate(pbar):
             # Extraer imágenes del batch
@@ -295,7 +297,7 @@ class DCTGANTrainer:
             for _ in range(disc_updates_per_batch):
                 self.optimizer_D.zero_grad(set_to_none=True)  # Más eficiente
                 
-                # Forward pass con AMP
+                # Forward pass con AMP (solo inferencia)
                 with amp.autocast('cuda', enabled=self.use_amp):
                     # Forward pass del generator (sin gradientes para encoder/decoder)
                     with torch.no_grad():
@@ -305,10 +307,12 @@ class DCTGANTrainer:
                     real_validity = self.model.discriminator(cover)
                     fake_validity = self.model.discriminator(stego.detach())
                     
+                # Losses en float32 para estabilidad numérica
+                with amp.autocast('cuda', enabled=False):
                     # Discriminator loss (WGAN)
                     loss_D, disc_metrics = self.hybrid_loss.discriminator_loss(
-                        real_validity, 
-                        fake_validity
+                        real_validity.float(),
+                        fake_validity.float()
                     )
                     
                     # Gradient penalty (WGAN-GP)
@@ -321,6 +325,11 @@ class DCTGANTrainer:
                     
                     # Total discriminator loss
                     loss_D_total = loss_D + gp
+
+                if not torch.isfinite(loss_D_total):
+                    self.logger.warning(f"Non-finite discriminator loss at epoch {self.current_epoch+1}, batch {batch_idx+1}; skipping D update")
+                    self.optimizer_D.zero_grad(set_to_none=True)
+                    continue
                 
                 # Backward con AMP
                 self.scaler.scale(loss_D_total).backward()
@@ -368,22 +377,29 @@ class DCTGANTrainer:
             for _ in range(gen_updates_per_batch):
                 self.optimizer_G.zero_grad(set_to_none=True)
                 
-                # Forward pass con AMP
+                # Forward pass con AMP (solo inferencia)
                 with amp.autocast('cuda', enabled=self.use_amp):
                     # Forward pass completo
                     stego, recovered_secret = self.model(cover, secret, mode='full')
                     
                     # Discriminator output para stego
                     fake_validity = self.model.discriminator(stego)
-                    
+
+                # Loss del generador en float32 para evitar NaNs por under/overflow
+                with amp.autocast('cuda', enabled=False):
                     # Generator loss (Ecuación 5)
                     loss_G, gen_metrics = self.hybrid_loss.generator_loss(
-                        cover_image=cover,
-                        stego_image=stego,
-                        secret_original=secret,
-                        secret_recovered=recovered_secret,
-                        discriminator_output=fake_validity
+                        cover_image=cover.float(),
+                        stego_image=stego.float(),
+                        secret_original=secret.float(),
+                        secret_recovered=recovered_secret.float(),
+                        discriminator_output=fake_validity.float()
                     )
+
+                if not torch.isfinite(loss_G):
+                    self.logger.warning(f"Non-finite generator loss at epoch {self.current_epoch+1}, batch {batch_idx+1}; skipping G update")
+                    self.optimizer_G.zero_grad(set_to_none=True)
+                    continue
                 
                 # Backward con AMP
                 self.scaler.scale(loss_G).backward()
@@ -427,6 +443,10 @@ class DCTGANTrainer:
                 
                 # SSIM (cover vs stego)
                 ssim = calculate_ssim(cover_f32, stego_f32)
+
+                if (not torch.isfinite(psnr)) or (not math.isfinite(ssim)):
+                    self.logger.warning(f"Non-finite metrics at epoch {self.current_epoch+1}, batch {batch_idx+1}; skipping metric accumulation")
+                    continue
                 
                 # Acumular métricas (usar promedios calculados)
                 epoch_metrics['loss_G_total'] += loss_G_avg
@@ -439,6 +459,7 @@ class DCTGANTrainer:
                 epoch_metrics['ssim'] += ssim
                 epoch_metrics['D_real'] += d_real_avg
                 epoch_metrics['D_fake'] += d_fake_avg
+                valid_batches += 1
             
             # Actualizar progress bar (usar promedios)
             pbar.set_postfix({
@@ -451,8 +472,9 @@ class DCTGANTrainer:
             })
         
         # Promediar métricas
+        denom = max(valid_batches, 1)
         for key in epoch_metrics:
-            epoch_metrics[key] /= num_batches
+            epoch_metrics[key] /= denom
         
         return epoch_metrics
     
@@ -479,6 +501,7 @@ class DCTGANTrainer:
         
         with torch.no_grad():
             pbar = tqdm(val_loader, desc="Validating")
+            valid_batches = 0
             
             for batch in pbar:
                 cover = batch['cover'].to(self.device)
@@ -491,14 +514,16 @@ class DCTGANTrainer:
                     
                     # Discriminator output
                     fake_validity = self.model.discriminator(stego)
-                    
+
+                # Loss en float32 para estabilidad numérica
+                with amp.autocast('cuda', enabled=False):
                     # Generator loss
                     loss_G, _ = self.hybrid_loss.generator_loss(
-                        cover_image=cover,
-                        stego_image=stego,
-                        secret_original=secret,
-                        secret_recovered=recovered_secret,
-                        discriminator_output=fake_validity
+                        cover_image=cover.float(),
+                        stego_image=stego.float(),
+                        secret_original=secret.float(),
+                        secret_recovered=recovered_secret.float(),
+                        discriminator_output=fake_validity.float()
                     )
                 
                 # Métricas (convert to float32 for AMP compatibility)
@@ -510,12 +535,17 @@ class DCTGANTrainer:
                 psnr = calculate_psnr(cover_f32, stego_f32, max_val=1.0)
                 ssim = calculate_ssim(cover_f32, stego_f32)
                 rmse = calculate_rmse(secret_f32, recovered_secret_f32)
+
+                if (not torch.isfinite(loss_G)) or (not torch.isfinite(psnr)) or (not math.isfinite(ssim)) or (not math.isfinite(rmse)):
+                    self.logger.warning("Non-finite validation metrics detected; skipping batch")
+                    continue
                 
                 # Acumular
                 val_metrics['loss_G_total'] += loss_G.item()
                 val_metrics['psnr'] += psnr.item()
                 val_metrics['ssim'] += ssim
                 val_metrics['rmse'] += rmse
+                valid_batches += 1
                 
                 pbar.set_postfix({
                     'PSNR': f"{psnr.item():.2f} dB",
@@ -523,8 +553,9 @@ class DCTGANTrainer:
                 })
         
         # Promediar
+        denom = max(valid_batches, 1)
         for key in val_metrics:
-            val_metrics[key] /= num_batches
+            val_metrics[key] /= denom
         
         return val_metrics
     
@@ -577,7 +608,7 @@ class DCTGANTrainer:
         """
         self.logger.info(f"Loading checkpoint from {checkpoint_path}")
         
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
@@ -660,13 +691,18 @@ class DCTGANTrainer:
             # SAVE CHECKPOINT
             # ============================================
             current_psnr = val_metrics.get('psnr', train_metrics['psnr'])
-            is_best = current_psnr > self.best_psnr
-            
-            if is_best:
-                self.best_psnr = current_psnr
-                epochs_without_improvement = 0
-            else:
+            if not math.isfinite(current_psnr):
+                self.logger.warning("Current PSNR is non-finite; skipping best-model update for this epoch")
+                is_best = False
                 epochs_without_improvement += 1
+            else:
+                is_best = current_psnr > self.best_psnr
+
+                if is_best:
+                    self.best_psnr = current_psnr
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
             
             # Guardar checkpoint
             if (epoch + 1) % save_frequency == 0 or is_best:

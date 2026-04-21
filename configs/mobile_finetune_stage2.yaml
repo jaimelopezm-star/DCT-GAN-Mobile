@@ -101,7 +101,7 @@ training:
     max_norm: 0.5
 
   mixed_precision:
-    enabled: true
+    enabled: false
 
   checkpoint:
     save_every: 5
