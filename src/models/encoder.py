@@ -323,7 +323,10 @@ class MobileNetV3Encoder(nn.Module):
             nn.ConvTranspose2d(32, 16, 4, 2, 1),       # 128x128
             nn.BatchNorm2d(16),
             nn.Hardswish(),
-            nn.ConvTranspose2d(16, 8, 4, 2, 1),        # 256x256
+            nn.ConvTranspose2d(16, 8, 4, 2, 1),        # 128x128
+            nn.BatchNorm2d(8),
+            nn.Hardswish(),
+            nn.ConvTranspose2d(8, 8, 4, 2, 1),         # 256x256
             nn.BatchNorm2d(8),
             nn.Hardswish(),
         )
