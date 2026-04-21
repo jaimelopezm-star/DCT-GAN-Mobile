@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch import amp
 from pathlib import Path
 import time
 from typing import Dict, Tuple, Optional, List
@@ -207,10 +207,16 @@ class DCTGANTrainer:
         """
         train_config = self.config.get('training', {})
         hardware_config = self.config.get('hardware', {})
-        
-        # Mixed Precision (AMP)
-        self.use_amp = hardware_config.get('mixed_precision', False)
-        self.scaler = GradScaler(enabled=self.use_amp)
+
+        # Mixed Precision (AMP): prefer training.mixed_precision.enabled,
+        # fallback to hardware.mixed_precision for backward compatibility.
+        mixed_precision_cfg = train_config.get('mixed_precision', {})
+        use_amp_cfg = mixed_precision_cfg.get('enabled')
+        if use_amp_cfg is None:
+            use_amp_cfg = hardware_config.get('mixed_precision', False)
+
+        self.use_amp = bool(use_amp_cfg) and self.device.type == 'cuda'
+        self.scaler = amp.GradScaler('cuda', enabled=self.use_amp)
         
         # Gradient Clipping
         grad_clip_config = train_config.get('gradient_clipping', {})
@@ -290,7 +296,7 @@ class DCTGANTrainer:
                 self.optimizer_D.zero_grad(set_to_none=True)  # Más eficiente
                 
                 # Forward pass con AMP
-                with autocast(enabled=self.use_amp):
+                with amp.autocast('cuda', enabled=self.use_amp):
                     # Forward pass del generator (sin gradientes para encoder/decoder)
                     with torch.no_grad():
                         stego, _ = self.model(cover, secret, mode='full')
@@ -363,7 +369,7 @@ class DCTGANTrainer:
                 self.optimizer_G.zero_grad(set_to_none=True)
                 
                 # Forward pass con AMP
-                with autocast(enabled=self.use_amp):
+                with amp.autocast('cuda', enabled=self.use_amp):
                     # Forward pass completo
                     stego, recovered_secret = self.model(cover, secret, mode='full')
                     
@@ -479,7 +485,7 @@ class DCTGANTrainer:
                 secret = batch['secret'].to(self.device)
                 
                 # Forward pass con AMP
-                with autocast(enabled=self.use_amp):
+                with amp.autocast('cuda', enabled=self.use_amp):
                     # Forward pass
                     stego, recovered_secret = self.model(cover, secret, mode='full')
                     

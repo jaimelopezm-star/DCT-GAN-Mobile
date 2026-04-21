@@ -399,6 +399,9 @@ def main():
     
     # Configuración de entrenamiento
     num_epochs = config.get('training', {}).get('num_epochs', 100)
+    checkpoint_cfg = config.get('training', {}).get('checkpoint', {})
+    save_frequency = checkpoint_cfg.get('save_every', 10)
+    early_stopping_patience = config.get('training', {}).get('early_stopping_patience', 50)
     
     # Get update strategy from config
     update_strategy = config.get('training', {}).get('update_strategy', {})
@@ -429,8 +432,8 @@ def main():
             train_loader=train_loader,
             val_loader=val_loader,
             num_epochs=num_epochs,
-            save_frequency=10,
-            early_stopping_patience=50  # Aumentado de 20 a 50 para dar más margen
+            save_frequency=save_frequency,
+            early_stopping_patience=early_stopping_patience
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Training interrupted by user")
