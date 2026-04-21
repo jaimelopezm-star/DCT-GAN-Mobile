@@ -36,10 +36,14 @@ class SRMFilter(nn.Module):
         # Kernel KV del paper (5×5) para 3 canales
         # Este es un ejemplo simplificado del filtro SRM
         kernel = self._get_srm_kernel()
-        
-        # Repetir para cada canal RGB
-        kernel = np.stack([kernel] * 3, axis=0)  # (3, 1, 5, 5)
+
+        # Repetir para cada canal RGB.
+        # _get_srm_kernel retorna (1, 1, 5, 5), y Conv2d espera (out_ch, in_ch/groups, kH, kW).
+        kernel = np.repeat(kernel, repeats=3, axis=0)  # (3, 1, 5, 5)
         kernel = torch.FloatTensor(kernel)
+
+        if kernel.ndim != 4:
+            raise ValueError(f"SRM kernel debe ser 4D, recibido shape={tuple(kernel.shape)}")
         
         # Usar Conv2d - stride=1 por defecto
         self.conv = nn.Conv2d(3, 3, kernel_size=5, padding=2, groups=3, bias=False)
