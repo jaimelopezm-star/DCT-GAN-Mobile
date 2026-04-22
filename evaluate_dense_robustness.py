@@ -25,6 +25,8 @@ import math
 import random
 from pathlib import Path
 
+import cv2
+import numpy as np
 import torch
 from PIL import Image
 from torchvision import transforms
@@ -134,6 +136,61 @@ def apply_inverse_affine(
     return restored.unsqueeze(0)
 
 
+def tensor_to_gray_numpy(image_01: torch.Tensor) -> np.ndarray:
+    image_np = image_01.detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+    image_np = np.clip(image_np, 0.0, 1.0).astype(np.float32)
+    return cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+
+
+def numpy_to_tensor_01(image_np: np.ndarray) -> torch.Tensor:
+    image_np = np.clip(image_np, 0.0, 1.0).astype(np.float32)
+    if image_np.ndim == 2:
+        image_np = np.expand_dims(image_np, axis=-1)
+    image_np = np.transpose(image_np, (2, 0, 1))
+    return torch.from_numpy(image_np).unsqueeze(0)
+
+
+def estimate_and_compensate_affine(reference_01: torch.Tensor, attacked_01: torch.Tensor) -> torch.Tensor:
+    reference_np = reference_01.detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+    attacked_np = attacked_01.detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+    reference_np = np.clip(reference_np, 0.0, 1.0).astype(np.float32)
+    attacked_np = np.clip(attacked_np, 0.0, 1.0).astype(np.float32)
+
+    reference_gray = cv2.cvtColor(reference_np, cv2.COLOR_RGB2GRAY)
+    attacked_gray = cv2.cvtColor(attacked_np, cv2.COLOR_RGB2GRAY)
+
+    warp_matrix = np.eye(2, 3, dtype=np.float32)
+    criteria = (
+        cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+        100,
+        1e-6,
+    )
+
+    try:
+        _, warp_matrix = cv2.findTransformECC(
+            reference_gray,
+            attacked_gray,
+            warp_matrix,
+            cv2.MOTION_EUCLIDEAN,
+            criteria,
+            None,
+            5,
+        )
+    except cv2.error:
+        return attacked_01
+
+    height, width = reference_gray.shape
+    compensated = cv2.warpAffine(
+        attacked_np,
+        warp_matrix,
+        (width, height),
+        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0.5, 0.5, 0.5),
+    )
+    return numpy_to_tensor_01(compensated)
+
+
 def parse_int_list(raw_value: str):
     return [int(item.strip()) for item in raw_value.split(",") if item.strip()]
 
@@ -176,6 +233,18 @@ def evaluate_compensated_set(name, samples, decoder, device):
     }
 
 
+def evaluate_auto_compensated_set(name, samples, decoder, device):
+    psnr_values = []
+    for sample in samples:
+        compensated = estimate_and_compensate_affine(sample["reference_01"], sample["attacked"])
+        recovered = decode_secret(decoder, compensated, device)
+        psnr_values.append(psnr_01(sample["secret_01"].to(device), recovered))
+    return {
+        "attack": name,
+        "recovery_psnr": sum(psnr_values) / len(psnr_values),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Dense robustness against JPEG and geometric attacks")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to dense checkpoint")
@@ -187,6 +256,7 @@ def main():
     parser.add_argument("--rotation_angles", type=str, default="5,-5,10,-10", help="Comma-separated angles in degrees")
     parser.add_argument("--translations", type=str, default="4:0,-4:0,0:4,0:-4", help="Comma-separated tx:ty pixel shifts")
     parser.add_argument("--scales", type=str, default="0.95,1.05", help="Comma-separated scaling factors")
+    parser.add_argument("--auto_compensation", action="store_true", help="Estimate and compensate small rotation/translation automatically")
     parser.add_argument("--oracle_compensation", action="store_true", help="Apply inverse geometric transform before decoding")
     args = parser.parse_args()
 
@@ -235,6 +305,7 @@ def main():
     print(f"Modelo: encoder={encoder_type}, decoder={decoder_type}, hidden={hidden_size}")
     print(f"Val dir: {val_dir}")
     print(f"Samples: {n}")
+    print(f"Auto compensation: {'ON' if args.auto_compensation else 'OFF'}")
     print(f"Oracle compensation: {'ON' if args.oracle_compensation else 'OFF'}")
 
     with torch.no_grad():
@@ -252,12 +323,14 @@ def main():
 
             baseline_samples.append({
                 "attacked": stego_01,
+                "reference_01": stego_01,
                 "secret_01": secret_01,
             })
 
             for quality in jpeg_qualities:
                 jpeg_samples[quality].append({
                     "attacked": apply_jpeg_attack(stego_01, quality),
+                    "reference_01": stego_01,
                     "secret_01": secret_01,
                 })
 
@@ -265,6 +338,7 @@ def main():
                 attacked = apply_affine_attack(stego_01, angle=angle)
                 rotation_samples[angle].append({
                     "attacked": attacked,
+                    "reference_01": stego_01,
                     "secret_01": secret_01,
                     "angle": angle,
                     "translate_x": 0.0,
@@ -279,6 +353,7 @@ def main():
                 attacked = apply_affine_attack(stego_01, translate_x=tx, translate_y=ty)
                 translation_samples[spec].append({
                     "attacked": attacked,
+                    "reference_01": stego_01,
                     "secret_01": secret_01,
                     "angle": 0.0,
                     "translate_x": tx,
@@ -290,6 +365,7 @@ def main():
                 attacked = apply_affine_attack(stego_01, scale=scale)
                 scale_samples[scale].append({
                     "attacked": attacked,
+                    "reference_01": stego_01,
                     "secret_01": secret_01,
                     "angle": 0.0,
                     "translate_x": 0.0,
@@ -307,11 +383,15 @@ def main():
 
     for angle, samples in rotation_samples.items():
         results.append(evaluate_attack_set(f"rotate_{angle:+.0f}", samples, decoder, device))
+        if args.auto_compensation:
+            results.append(evaluate_auto_compensated_set(f"rotate_{angle:+.0f}_auto", samples, decoder, device))
         if args.oracle_compensation:
             results.append(evaluate_compensated_set(f"rotate_{angle:+.0f}_oracle", samples, decoder, device))
 
     for spec, samples in translation_samples.items():
         results.append(evaluate_attack_set(f"translate_{spec}", samples, decoder, device))
+        if args.auto_compensation:
+            results.append(evaluate_auto_compensated_set(f"translate_{spec}_auto", samples, decoder, device))
         if args.oracle_compensation:
             results.append(evaluate_compensated_set(f"translate_{spec}_oracle", samples, decoder, device))
 
