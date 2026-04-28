@@ -11,14 +11,14 @@
 
 Este documento presenta el progreso en la implementación y optimización del modelo DCT-GAN propuesto por Malik et al. (2025) para esteganografía basada en transformada de coseno discreto (DCT) y redes generativas adversarias (GAN).
 
-**Logros principales**:
-- ✅ Implementación completa de la arquitectura DCT-GAN
-- ✅ Identificación y corrección del bug crítico en ratio de actualización discriminador/generador
-- ✅ Optimización de velocidad de entrenamiento (6-8× más rápido)
-- ✅ SSIM: 85.7% (91% del objetivo del paper)
-- ⚠️ PSNR: 17.63 dB con dataset sintético (30% del objetivo)
+**Logros principales (actualización Abril 2026)**:
+- ✅ Baseline Dense validado en DIV2K real: **PSNR visual 48.81 dB**
+- ✅ Recovery PSNR baseline: **17.43 dB**
+- ✅ Evaluación de robustez JPEG y geométrica sobre 120 muestras
+- ✅ Compensación automática en rotación/traslación pequeñas con mejora medible
+- ✅ En varios ataques geométricos, `auto` alcanza resultados muy cercanos a `oracle`
 
-**Estado actual**: Implementación funcional lista para entrenamiento con dataset real (BOSSBase)
+**Estado actual**: contribución experimental sólida para tesis/presentación: baseline fuerte + extensión de robustez geométrica automática.
 
 ---
 
@@ -651,6 +651,23 @@ PSNR Val (dB)
 
 ## 10. Conclusiones Finales
 
+### 10.0 Actualización de Resultados (Abril 2026)
+
+Se incorporó una línea de evaluación y contribución enfocada en robustez geométrica para el baseline denso (`exp19_quality_base`).
+
+**Resultados consolidados**:
+- Baseline recovery: **17.43 dB**
+- JPEG Q=95/75/50: **12.47 / 12.20 / 12.00 dB**
+- Rotación +5°: 13.59 dB -> **15.10 dB** con compensación automática
+- Rotación +10°: 11.97 dB -> **14.11 dB** con compensación automática
+- Traslación 4:0: 15.81 dB -> **17.11 dB** con compensación automática
+- Traslación 0:-4: 14.86 dB -> **17.05 dB** con compensación automática
+
+**Interpretación**:
+- La robustez JPEG sigue limitada y se mantiene como principal frente de mejora.
+- En rotación/traslación pequeñas, la compensación automática recupera gran parte de la pérdida.
+- La cercanía entre resultados `auto` y `oracle` respalda la viabilidad técnica del módulo de estimación geométrica.
+
 ### 10.1 Logros Técnicos
 1. ✅ **Implementación completa y funcional** del modelo DCT-GAN
 2. ✅ **Bug crítico identificado y corregido** (ratio 4G:1D → 5D:1G)
@@ -693,6 +710,20 @@ cover = torch.randn(3, 256, 256)  # R ≠ G ≠ B (mayor complejidad)
 - Velocidad mejorada (79% más rápido) pero calidad reducida
 
 ### 10.5 Recomendación Final Actualizada
+
+**Recomendación para presentación/tesis (estado actual):**
+
+Presentar la contribución como:
+
+> "Sistema de esteganografía con baseline fuerte y extensión de robustez ante transformaciones geométricas mediante compensación automática."
+
+**Argumentos defendibles con evidencia experimental**:
+- Baseline fuerte en calidad visual y recuperación funcional.
+- Degradación cuantificada frente a JPEG y ataques geométricos.
+- Recuperación efectiva bajo rotación/traslación pequeñas mediante compensación automática.
+- Brecha restante claramente identificada (robustez JPEG y transformaciones compuestas).
+
+---
 
 **Para avanzar hacia métricas del paper (PSNR 58.27 dB)**:
 
@@ -740,7 +771,7 @@ python train.py --dataset div2k
 **Institución**: [Universidad]  
 **Repositorio**: github.com/jaimelopezm-star/DCT-GAN-Mobile
 
-**Última actualización**: Abril 8, 2025 (Experimento 5 - BOSSBase completado: 54 epochs, early stopping)
+**Última actualización**: Abril 2026 (Exp19 baseline + evaluación de robustez JPEG/geométrica con compensación automática)
 
 ---
 
