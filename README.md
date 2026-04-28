@@ -6,21 +6,20 @@ Implementación del framework híbrido DCT-GAN para esteganografía de imágenes
 
 ## 🎯 Objetivos del Proyecto
 
-### ✅ Fase 1: Replicación del Paper Base (ACTUAL - 80% completado)
-- ✅ Implementar arquitectura DCT-GAN original (ResNet encoder + CNN decoder + XuNet discriminator)
-- ✅ Optimizar parámetros: 45,998 params (-7.9% vs paper ✓)
-- ⏳ Entrenar en ImageNet 2012 (50K imágenes)
-- ⏳ Validar métricas: PSNR ~58 dB, SSIM ~0.94
+### ✅ Fase 1: Baseline de Alta Calidad (Validada)
+- ✅ Implementación de línea densa (Dense Encoder + Dense Decoder)
+- ✅ Evaluación en DIV2K real (no sintético)
+- ✅ Resultado validado: **PSNR visual 48.81 dB**
+- ✅ Resultado validado: **Recovery PSNR 17.43 dB**
 
-**Estado:** Código completo, pendiente entrenamiento con dataset real  
-**Ver:** [QUICKSTART.md](QUICKSTART.md) para instrucciones de uso
+**Estado:** Baseline fuerte y reproducible con checkpoint `exp19_quality_base`.
 
-### 📋 Fase 2: Validación Robusta (Siguiente revisión)
-- Agregar BOSSBase 1.01 para steganalysis testing
-- Validar robustez JPEG (95% accuracy @ Q=50)
-- Comparar con métodos SOTA
+### ✅ Fase 2: Robustez Geométrica (Validación Inicial Completada)
+- ✅ Evaluación de robustez JPEG y ataques geométricos (rotación/traslación/escala)
+- ✅ Compensación automática para **rotación pequeña y traslación pequeña**
+- ✅ Ganancia significativa en recuperación frente a ataques geométricos
 
-**Ver:** [ROADMAP.md](ROADMAP.md) para plan completo
+**Contribución actual:** sistema de esteganografía con baseline fuerte y extensión de robustez geométrica automática.
 
 ### 🚀 Fase 3: Mobile-StegoNet (Propuesta futura)
 - Reemplazar ResNet por MobileNetV3-Small (reducción 60% parámetros)
@@ -209,25 +208,47 @@ ls checkpoints\
 
 ## 📊 Métricas de Evaluación
 
-| Métrica | Paper Original | Nuestra Implementación | Estado |
-|---------|---------------|----------------------|--------|
-| **Arquitectura** |
-| Parámetros | 49.95K | 45.998K | ✅ -7.9% |
-| Encoder params | ~25K | 17.010K | ✅ |
-| Decoder params | ~15K | 4.143K | ✅ |
-| Discriminator params | ~10K | 24.845K | ⚠️ |
-| **Calidad (Imagen)** |
-| PSNR (dB) | 58.27 | Pendiente* | ⏳ |
-| SSIM | 0.942 | Pendiente* | ⏳ |
-| **Recuperación (Secret)** |
-| Accuracy | 96.10% | 96.03%** | ✅ |
-| BER | <0.05 | 0.0397** | ✅ |
-| **Robustez** |
-| JPEG (Q=50) | 95% | Pendiente* | ⏳ |
-| Inferencia (ms) | 17-18 | Pendiente* | ⏳ |
+| Métrica | Paper Original | Nuestra Implementación (Abril 2026) | Estado |
+|---------|---------------|--------------------------------------|--------|
+| **Calidad visual** |
+| PSNR visual (cover vs stego) | 58.27 dB | **48.81 dB** | ✅ Validado |
+| SSIM visual | 0.942 | Pendiente (línea Dense) | ⏳ |
+| **Recuperación** |
+| Recovery PSNR (baseline) | - | **17.43 dB** | ✅ Validado |
+| **Robustez JPEG** |
+| JPEG Q=95 (recovery) | - | 12.47 dB | ⚠️ |
+| JPEG Q=75 (recovery) | - | 12.20 dB | ⚠️ |
+| JPEG Q=50 (recovery) | 95%* | 12.00 dB | ⚠️ En mejora |
+| **Robustez geométrica** |
+| Rotate +5° (sin compensación) | - | 13.59 dB | ✅ |
+| Rotate +5° (auto compensación) | - | **15.10 dB** | ✅ Mejora |
+| Translate 4:0 (sin compensación) | - | 15.81 dB | ✅ |
+| Translate 4:0 (auto compensación) | - | **17.11 dB** | ✅ Mejora |
 
-\* Requiere entrenamiento completo con ImageNet  
-\*\* Medido en datos sintéticos (testing)
+\* El paper reporta robustez con criterio distinto; aquí se reporta Recovery PSNR bajo ataque.
+
+## 🧪 Resultados de Robustez (Abril 2026)
+
+El script `evaluate_dense_robustness.py` valida tres escenarios para ataques geométricos:
+- Sin compensación
+- Compensación automática (estimada por registro)
+- Compensación oracle (techo superior)
+
+Resultado clave:
+- En rotación y traslación pequeñas, la compensación automática recupera gran parte de la caída.
+- En varios casos, el resultado `auto` queda muy cercano al `oracle`.
+- JPEG sigue siendo el frente principal de mejora futura.
+
+Comando de evaluación usado:
+
+```bash
+python evaluate_dense_robustness.py \
+    --checkpoint checkpoints/exp19_quality_base/best_model.pth \
+    --val_dir /workspace/DIV2K_prepared/val/images \
+    --samples 120 \
+    --auto_compensation \
+    --oracle_compensation
+```
 
 ## 📚 Referencias
 
@@ -248,12 +269,12 @@ ls checkpoints\
 ## 📈 Roadmap
 
 - [x] Estructura del proyecto
-- [ ] Implementación DCT transform
-- [ ] Implementación encoder ResNet
-- [ ] Implementación decoder CNN
-- [ ] Implementación discriminador XuNet
-- [ ] Loop de entrenamiento GAN
-- [ ] Validación métricas paper original
+- [x] Baseline Dense entrenado y evaluado en DIV2K
+- [x] Evaluación de robustez JPEG/geométrica
+- [x] Compensación automática en rotación/traslación pequeñas
+- [ ] Mejora de robustez JPEG
+- [ ] Métricas adicionales (SSIM, BER robusto) en línea Dense
+- [ ] Validación extendida en transformaciones compuestas
 - [ ] Implementación MobileNetV3 encoder
 - [ ] Cuantización INT8
 - [ ] Optimización TensorFlow Lite
@@ -275,4 +296,4 @@ Línea de investigación: Esteganografía, Trust Boundaries, Seguridad en Dispos
 
 ---
 
-**Última actualización**: Marzo 2026
+**Última actualización**: Abril 2026
